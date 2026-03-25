@@ -63,3 +63,6 @@ deploy/charts/dpf-operator/dev/helmfiles/**
 
 # build is the output directory for build artifacts, e.g. our defaults.yaml
 build/
+
+# Local project context
+CLAUDE.md

@@ -1,0 +1,83 @@
+// Include required headers
+#include "callbacks.h"
+
+// Register logger backend
+DOCA_LOG_REGISTER(LAB4::CALLBACKS);
+
+// Handles state changes in compression context and updates program status
+void compress_state_changed_callback(const union doca_data user_data,
+					    struct doca_ctx *ctx,
+					    enum doca_ctx_states prev_state,
+					    enum doca_ctx_states next_state) {
+	(void)ctx;
+	(void)prev_state;
+
+	struct program_state *state = (struct program_state *)user_data.ptr;
+
+	switch (next_state) {
+		case DOCA_CTX_STATE_IDLE:
+			DOCA_LOG_INFO("Compress context has been stopped");
+			state->run_pe_progress = false;
+			break;
+		case DOCA_CTX_STATE_STARTING:
+			DOCA_LOG_ERR("Compress context entered into starting" 
+                "state. Unexpected transition");
+			break;
+		case DOCA_CTX_STATE_RUNNING:
+			DOCA_LOG_INFO("Compress context is running");
+			break;
+		case DOCA_CTX_STATE_STOPPING:
+			DOCA_LOG_INFO("Compress context entered into stopping state." 
+                "Any inflight tasks will be flushed");
+			break;
+		default:
+			break;
+	}
+}
+
+// Handle for successful decompression
+void decompress_deflate_completed_callback(
+    struct doca_compress_task_decompress_deflate *decompress_task,
+    union doca_data task_user_data,
+    union doca_data ctx_user_data) {
+    struct program_state *resources = (
+        struct program_state *)ctx_user_data.ptr;
+    struct compress_deflate_result *result = (
+        struct compress_deflate_result *)task_user_data.ptr;
+
+    DOCA_LOG_INFO("Decompress task was done successfully");
+
+    result->crc_cs = 
+        doca_compress_task_decompress_deflate_get_crc_cs(decompress_task);
+    result->adler_cs = 
+        doca_compress_task_decompress_deflate_get_adler_cs(decompress_task);
+    result->status = DOCA_SUCCESS;
+
+    doca_task_free(
+        doca_compress_task_decompress_deflate_as_task(decompress_task));
+    --resources->num_remaining_tasks;
+    if (resources->num_remaining_tasks == 0)
+        (void)doca_ctx_stop(resources->compress_ctx);
+}
+
+// Handle for unsuccessful decompression
+void decompress_deflate_error_callback(
+    struct doca_compress_task_decompress_deflate *decompress_task,
+    union doca_data task_user_data,
+    union doca_data ctx_user_data) {
+    struct program_state *resources = (
+        struct program_state *)ctx_user_data.ptr;
+    struct doca_task *task = 
+        doca_compress_task_decompress_deflate_as_task(decompress_task);
+    struct compress_deflate_result *result = (
+        struct compress_deflate_result *)task_user_data.ptr;
+
+    result->status = doca_task_get_status(task);
+    DOCA_LOG_ERR("Decompress task failed: %s", 
+        doca_error_get_descr(result->status));
+    doca_task_free(task);
+    --resources->num_remaining_tasks;
+    if (resources->num_remaining_tasks == 0)
+        (void)doca_ctx_stop(resources->compress_ctx);
+}
+
