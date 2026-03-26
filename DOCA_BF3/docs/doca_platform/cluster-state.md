@@ -83,7 +83,7 @@ title: "클러스터 현황 및 DPF 사전 조사"
 
 ## DPF 설치를 위한 필요 작업
 
-> 주의: 현재 클러스터에는 ArgoCD와 NFD가 이미 설치되어 있으므로, `deploy/helmfiles/prereqs.yaml` 전체를 한 번에 적용하지 말고 필요한 릴리스만 selector로 설치하는 편이 안전하다.
+> 주의: ArgoCD, NFD 기설치 — `prereqs.yaml` 전체 적용 금지. 필요한 릴리스만 selector로 선택 설치
 
 **1단계 — 스토리지/레지스트리 정보 확인**
 ```bash
