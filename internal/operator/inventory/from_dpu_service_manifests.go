@@ -54,7 +54,7 @@ var dpuNetworkingSubCharts = map[operatorv1.ComponentName]bool{
 	operatorv1.MultusName:                 true,
 	operatorv1.SRIOVDevicePluginName:      true,
 	operatorv1.OVSCNIName:                 true,
-	operatorv1.NVIPAMName:                 true,
+	operatorv1.NVIPAMControllerName:       true,
 	operatorv1.SFCControllerName:          true,
 	operatorv1.CNIInstallerName:           true,
 	operatorv1.KubeStateMetricsName:       true,
@@ -228,7 +228,7 @@ func additionalValuesForComponent(name operatorv1.ComponentName, vars Variables)
 		return ovsCNIEdits(vars)
 	case operatorv1.SFCControllerName:
 		return sfcControllerEdits(vars)
-	case operatorv1.NVIPAMName:
+	case operatorv1.NVIPAMControllerName:
 		return nvipamEdits(vars)
 	case operatorv1.FlannelName:
 		return flannelEdits(vars)
@@ -272,8 +272,8 @@ func ovsCNIEdits(vars Variables) ([]StructuredEdit, error) {
 
 func nvipamEdits(vars Variables) ([]StructuredEdit, error) {
 	return []StructuredEdit{
-		dpuServiceAddValueEdit(vars.DPUCNIBinPath, operatorv1.NVIPAMName.String(), cniBinDirPathKey),
-		dpuServiceAddValueEdit(vars.DPUCNIConfPath, operatorv1.NVIPAMName.String(), cniConfDirPathKey),
+		dpuServiceAddValueEdit(vars.DPUCNIBinPath, operatorv1.NVIPAMControllerName.String(), cniBinDirPathKey),
+		dpuServiceAddValueEdit(vars.DPUCNIConfPath, operatorv1.NVIPAMControllerName.String(), cniConfDirPathKey),
 	}, nil
 }
 
@@ -281,9 +281,9 @@ func openTelemetryCollectorEdits(vars Variables) ([]StructuredEdit, error) {
 	edits := []StructuredEdit{}
 
 	// Set the management endpoint if provided
-	if vars.OpenTelemetryCollector.ManagementEndpoint != nil {
-		edits = append(edits, dpuServiceAddValueEdit(*vars.OpenTelemetryCollector.ManagementEndpoint,
-			operatorv1.OpenTelemetryCollectorName.String(), "managementEndpoint"))
+	if vars.OpenTelemetryCollector.LoggingEndpoint != "" {
+		edits = append(edits, dpuServiceAddValueEdit(vars.OpenTelemetryCollector.LoggingEndpoint,
+			operatorv1.OpenTelemetryCollectorName.String(), "logging", "endpoint"))
 	}
 
 	return edits, nil

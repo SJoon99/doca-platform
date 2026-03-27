@@ -30,7 +30,7 @@ import (
 )
 
 func VerifyHostKSMMetricsCollection(ctx context.Context) {
-	By("verify host cluster kube-state-metrics endpoint is accessible")
+	By("Verify host cluster kube-state-metrics endpoint is accessible")
 	Eventually(func(g Gomega) {
 		request := hostClusterRESTClient.Get().AbsPath(metricsURI)
 		response, err := request.DoRaw(ctx)
@@ -40,13 +40,13 @@ func VerifyHostKSMMetricsCollection(ctx context.Context) {
 }
 
 func VerifyDPUKSMMetricsCollection(ctx context.Context, input *systemTestInput) {
-	By("verify DPU cluster kube-state-metrics endpoint is accessible")
+	By("Verify DPU cluster kube-state-metrics endpoint is accessible")
 	Eventually(func(g Gomega) {
 		// Get the KSM metrics URI for the first DPUCluster
 		// Note: The in-cluster kube-state-metrics service runs on the management cluster,
 		// not on the DPU cluster. It connects remotely to collect DPU cluster metrics.
 		g.Expect(input.dpuClusters).ToNot(BeEmpty(), "No DPUClusters found in test input")
-		dpuKSMMetricsURI, err := metrics.GetKSMMetricsURIForDPUCluster(ctx, input.client, input.dpuClusters[0], dpfOperatorSystemNamespace, 8080, "/metrics")
+		dpuKSMMetricsURI, err := metrics.GetKSMMetricsURIForDPUCluster(ctx, input.client, input.dpuClusters[0], dpfOperatorSystemNamespace, kubeStateMetricsPort, "/metrics")
 		g.Expect(err).NotTo(HaveOccurred(), "Failed to get KSM metrics URI for DPUCluster")
 		g.Expect(dpuKSMMetricsURI).NotTo(BeEmpty())
 
@@ -59,11 +59,11 @@ func VerifyDPUKSMMetricsCollection(ctx context.Context, input *systemTestInput) 
 }
 
 func ValidateGeneralDPFMetrics(ctx context.Context, input *systemTestInput) {
-	By("verify metrics are being collected")
+	By("Verify metrics are being collected")
 	expectedMetricsNames := map[string][]string{
-		"bfb":               {"created", "info", "status_phase"},
-		"dpfoperatorconfig": {"created", "info", "status_conditions", "status_condition_last_transition_time"}, // "paused" missed
-		"dpucluster":        {"created", "info", "status_phase", "status_conditions", "status_condition_last_transition_time"},
+		"bfb":               {"created", "info", "status_phase", "version_bsp", "version_doca", "version_uefi", "version_atf", "file_name"},
+		"dpfoperatorconfig": {"created", "info", "status_conditions", "status_condition_last_transition_time", "version"}, // "paused" missed
+		"dpucluster":        {"created", "info", "status_phase", "status_conditions", "status_condition_last_transition_time", "status_nodes_count"},
 	}
 
 	if input.hasDpuNodes() {
@@ -76,22 +76,20 @@ func ValidateGeneralDPFMetrics(ctx context.Context, input *systemTestInput) {
 			g.Expect(dpus.Items).To(HaveLen(input.totalDPUs()))
 		}).WithTimeout(60 * time.Second).Should(Succeed())
 
-		expectedMetricsNames["dpu"] = []string{"created", "info", "status_phase", "status_conditions", "status_condition_last_transition_time", "operational_conditions", "operational_condition_last_transition_time"}
-		expectedMetricsNames["dpuset"] = []string{"created", "info", "status_conditions", "status_condition_last_transition_time"}
+		expectedMetricsNames["dpu"] = []string{"created", "info", "required_reset", "status_phase", "status_conditions", "status_condition_last_transition_time", "operational_conditions", "operational_condition_last_transition_time", "agent_conditions", "agent_condition_last_transition_time"}
+		expectedMetricsNames["dpuset"] = []string{"created", "info", "status_dpu_statistics", "status_conditions", "status_condition_last_transition_time"}
 		expectedMetricsNames["dpunode"] = []string{"created", "info", "reboot_in_progress", "status_conditions", "status_condition_last_transition_time"}
 		expectedMetricsNames["dpudevice"] = []string{"created", "info", "status_conditions", "status_condition_last_transition_time"}
 	}
 
 	Eventually(func(g Gomega) {
-		actualMetricsNames := metrics.GetKSMMetrics(ctx, hostClusterRESTClient, metricsURI)
+		actualMetricsNames := metrics.GetKSMMetrics(g, ctx, hostClusterRESTClient, metricsURI)
 		g.Expect(actualMetricsNames).NotTo(BeEmpty(), "Actual metrics are empty")
 		g.Expect(metrics.VerifyMetrics(expectedMetricsNames, actualMetricsNames)).To(BeEmpty())
 	}).WithTimeout(5 * time.Second).Should(Succeed())
 }
 
 func VerifyNodeProblemDetectorConditions(ctx context.Context, input *systemTestInput) {
-	expectedConditions := provisioningv1.GetNodeProblemDetectorConditions()
-
 	Eventually(func(g Gomega) {
 		for i, dpuCluster := range input.dpuClusters {
 			By(fmt.Sprintf("Checking node conditions in DPUCluster %s", dpuCluster.Name))
@@ -108,12 +106,35 @@ func VerifyNodeProblemDetectorConditions(ctx context.Context, input *systemTestI
 					nodeConditions[string(condition.Type)] = condition.Status
 				}
 
-				// Verify each expected condition exists on this node
-				for _, expectedCondition := range expectedConditions {
-					g.Expect(nodeConditions).To(HaveKey(expectedCondition),
-						fmt.Sprintf("Node %s in DPUCluster %s is missing expected condition %s",
-							node.Name, dpuCluster.Name, expectedCondition))
-				}
+				// Verify that the full set of Node conditions on DPUCluster nodes matches exactly
+				// the expected NPD and kubelet condition types.
+				//
+				// This assertion is intentionally strict: it will fail if any condition type is
+				// added, removed, or renamed (including non-NPD conditions). This guards against
+				// unintended changes to the overall condition surface of these nodes.
+				//
+				// If new legitimate condition types are introduced, this list must be updated
+				// accordingly.
+				//
+				// Keep in sync with GetNodeProblemDetectorConditions() in api/provisioning/v1alpha1/dpu_types.go:168
+				Expect(node.Status.Conditions).
+					To(ConsistOf(
+						HaveField("Type", Equal(provisioningv1.NPDConditionKernelDeadlock)),
+						HaveField("Type", Equal(provisioningv1.NPDConditionReadonlyFilesystem)),
+						HaveField("Type", Equal(provisioningv1.NPDConditionOVSvSwitchdHealthy)),
+						HaveField("Type", Equal(provisioningv1.NPDConditionOVSDBHealthy)),
+						HaveField("Type", Equal(provisioningv1.NPDConditionOVSHealthy)),
+						HaveField("Type", Equal(provisioningv1.NPDConditionDPUModeCorrect)),
+						HaveField("Type", Equal(provisioningv1.NPDConditionUplinkHealthy)),
+						HaveField("Type", Equal(provisioningv1.NPDConditionSRIOVHealthy)),
+						HaveField("Type", Equal(provisioningv1.NPDConditionMTUConfigured)),
+						// Kubelet conditions, not part of GetNodeProblemDetectorConditions()
+						HaveField("Type", Equal(corev1.NodeReady)),
+						HaveField("Type", Equal(corev1.NodeMemoryPressure)),
+						HaveField("Type", Equal(corev1.NodeDiskPressure)),
+						HaveField("Type", Equal(corev1.NodePIDPressure)),
+						HaveField("Type", Equal(corev1.NodeNetworkUnavailable)),
+					), "Node conditions do not match expected conditions")
 			}
 		}
 	}).WithTimeout(120 * time.Second).Should(Succeed())

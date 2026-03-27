@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"net"
 	"strings"
 	"time"
 
@@ -53,6 +54,13 @@ const (
 	CoreTestPriority = 101
 	// SDNTestPriority is the test priority for the "DPF System tests - SDN" test suite.
 	SDNTestPriority = 100
+
+	// kubeStateMetricsPort is the port used by kube-state-metrics across host and DPU clusters.
+	kubeStateMetricsPort = 8080
+	// testMTUValue is the MTU value used across e2e tests to trigger configuration changes.
+	testMTUValue = 1300
+	// bfbRegistryNodePort is the NodePort used by the BFB registry service.
+	bfbRegistryNodePort = 30082
 )
 
 // CleanupScope is an alias for cleanup.CleanupLabels for ease of use
@@ -76,6 +84,7 @@ type TestDomain struct {
 	OVSVPC               string // OVS VPC test suite
 	MultiDPUCluster      string // Multi DPUCluster setup tests
 	ZeroTrust            string // Zero Trust mode in DPFOperatorConfig on the BeforeSuite stage
+	Observability        string // Observability test suite
 }
 
 // Domain is the global instance of test label domains
@@ -96,6 +105,7 @@ var Domain = TestDomain{
 	OVSVPC:               "OVSVPC",
 	MultiDPUCluster:      "MultiDPUCluster",
 	ZeroTrust:            "ZeroTrust",
+	Observability:        "Observability",
 }
 
 var (
@@ -122,6 +132,9 @@ var (
 	dpuClusterName = ""
 	// dpuClusterNamespace optionally overrides the DPUCluster namespace.
 	dpuClusterNamespace = ""
+	// dpuClusterInterface can be used to override the interface specified in DPUCluster YAML files.
+	// This is useful when running e2e tests on different hardware setups where the interface name differs.
+	dpuClusterInterface = ""
 	// Labels and resources targeted for cleanup before running our e2e tests.
 	// This cleanup is typically handled by cleanupObjs, but if an e2e test fails, the standard cleanup may not be executed.
 	// Note: order matters as some object deletion depends on controllers that may be deployed via dpuservices/dpudeployments
@@ -287,6 +300,23 @@ func getClusterControlPlaneIP(ctx context.Context, testClient client.Client) str
 	return ""
 }
 
+// GetNodeInternalIP returns the internal IP of the node with the given name.
+func GetNodeInternalIP(ctx context.Context, c client.Client, nodeName string) net.IP {
+	node := &corev1.Node{}
+	Expect(c.Get(ctx, client.ObjectKey{Name: nodeName}, node)).To(Succeed())
+	for _, addr := range node.Status.Addresses {
+		if addr.Type != corev1.NodeInternalIP {
+			continue
+		}
+		ip := net.ParseIP(addr.Address)
+		if ip != nil {
+			return ip
+		}
+	}
+	Fail(fmt.Sprintf("No internal IP found for node %s", nodeName))
+	return nil
+}
+
 // getDPUClusterNodes returns all the nodes in the DPU cluster
 func getDPUClusterNodes(ctx context.Context, dpuClusterClient client.Client) []corev1.Node {
 	nodes := &corev1.NodeList{}
@@ -308,14 +338,14 @@ func VerifyPerformancePodToPodSameNode(ctx context.Context, input *systemTestInp
 	hostNamespace := namespacePrefix + "-same-node"
 	createTestNamespace(ctx, input.client, hostNamespace)
 
-	By("creating test pods")
+	By("Creating test pods")
 	pod1Config, pod2Config := getPodSameNodeConfigs(ctx, input, hostNamespace)
 	netshoot.CreateAndWaitForPods(ctx, input.client, []*netshoot.TestPodConfig{&pod1Config, &pod2Config})
 
-	By("get pod2 IP")
+	By("Get pod2 IP")
 	pod2IP := netshoot.GetPodIP(ctx, input.client, hostNamespace, pod2Config.Name)
 
-	By("running traffic test between pods")
+	By("Running traffic test between pods")
 	netshoot.RunTrafficTest(&hostClusterRESTClient, &input.restConfig, hostNamespace, pod1Config.Name, pod2Config.Name, pod2IP)
 }
 
@@ -328,14 +358,14 @@ func VerifyPerformancePodToPodDifferentNode(ctx context.Context, input *systemTe
 	hostNamespace := namespacePrefix + "-different-node"
 	createTestNamespace(ctx, input.client, hostNamespace)
 
-	By("creating test pods")
+	By("Creating test pods")
 	pod1Config, pod2Config := getPodDifferentNodeConfigs(ctx, input, hostNamespace)
 	netshoot.CreateAndWaitForPods(ctx, input.client, []*netshoot.TestPodConfig{&pod1Config, &pod2Config})
 
-	By("get pod2 IP")
+	By("Get pod2 IP")
 	pod2IP := netshoot.GetPodIP(ctx, input.client, hostNamespace, pod2Config.Name)
 
-	By("running traffic test between pods")
+	By("Running traffic test between pods")
 	netshoot.RunTrafficTest(&hostClusterRESTClient, &input.restConfig, hostNamespace, pod1Config.Name, pod2Config.Name, pod2IP)
 }
 

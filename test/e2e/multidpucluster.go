@@ -107,7 +107,7 @@ func ProvisionDPUDeploymentWithEachDPUJoiningADifferentDPUCluster(ctx context.Co
 		g.Expect(VerifyDeploymentUnderlyingObjectsCreated(ctx, g, input.client, dpuDeployment)).To(BeTrue())
 	}).WithTimeout(180 * time.Second).Should(Succeed())
 
-	By("verifying that the DPUDeployment is ready")
+	By("Verifying that the DPUDeployment is ready")
 	Eventually(func(g Gomega) {
 		g.Expect(input.client.Get(ctx, client.ObjectKeyFromObject(dpuDeployment), dpuDeployment)).To(Succeed())
 		g.Expect(conditions.IsTrue(dpuDeployment, conditions.TypeReady)).To(BeTrue())
@@ -192,7 +192,7 @@ func ValidateDPUServiceIPAMInL2ModeForMultiDPUCluster(ctx context.Context, input
 	}
 	Expect(input.client.Create(ctx, dpuServiceIPAM2)).To(Succeed())
 
-	By("Getting existing DPUDeployment and updating its servicechain to use DPUServiceIPAM")
+	By("Getting existing DPUDeployment and updating its ServiceChains to use DPUServiceIPAM")
 	dpuDeployment := generateDPUDeployment(input, "")
 	Expect(input.client.Get(ctx, client.ObjectKeyFromObject(dpuDeployment), dpuDeployment)).To(Succeed())
 	dpuDeploymentOriginal := dpuDeployment.DeepCopy()
@@ -216,7 +216,7 @@ func ValidateDPUServiceIPAMInL2ModeForMultiDPUCluster(ctx context.Context, input
 		g.Expect(podList.Items).To(HaveLen(1))
 
 		pod := podList.Items[0]
-		ipStr := getPodIPForInterface(pod, "net1")
+		ipStr := getPodIPForInterface(g, pod, "net1")
 		// Note that if the pod is restarted for whatever reason, NVIPAM will allocate the next IP in the block and this
 		// check will fail. This indicates that another issue occurs and should be checked why this happened to identify
 		// potential issues on other components. If this fails a lot, we can relax the check to check that the IP is part
@@ -235,7 +235,7 @@ func ValidateDPUServiceIPAMInL2ModeForMultiDPUCluster(ctx context.Context, input
 		g.Expect(podList.Items).To(HaveLen(1))
 
 		pod := podList.Items[0]
-		ipStr := getPodIPForInterface(pod, "net1")
+		ipStr := getPodIPForInterface(g, pod, "net1")
 		// Note that if the pod is restarted for whatever reason, NVIPAM will allocate the next IP in the block and this
 		// check will fail. This indicates that another issue occurs and should be checked why this happened to identify
 		// potential issues on other components. If this fails a lot, we can relax the check to check that the IP is part
@@ -305,7 +305,7 @@ func ValidateDPUServiceIPAMInL3ModeForMultiDPUCluster(ctx context.Context, input
 	}
 	Expect(input.client.Create(ctx, dpuServiceIPAM2)).To(Succeed())
 
-	By("Getting existing DPUDeployment and updating its servicechain to use DPUServiceIPAM")
+	By("Getting existing DPUDeployment and updating its ServiceChains to use DPUServiceIPAM")
 	dpuDeployment := generateDPUDeployment(input, "")
 	Expect(input.client.Get(ctx, client.ObjectKeyFromObject(dpuDeployment), dpuDeployment)).To(Succeed())
 	dpuDeploymentOriginal := dpuDeployment.DeepCopy()
@@ -329,7 +329,7 @@ func ValidateDPUServiceIPAMInL3ModeForMultiDPUCluster(ctx context.Context, input
 		g.Expect(podList.Items).To(HaveLen(1))
 
 		pod := podList.Items[0]
-		ipStr := getPodIPForInterface(pod, "net1")
+		ipStr := getPodIPForInterface(g, pod, "net1")
 		// Note that if the pod is restarted for whatever reason, NVIPAM will allocate the next IP in the block and this
 		// check will fail. This indicates that another issue occurs and should be checked why this happened to identify
 		// potential issues on other components. If this fails a lot, we can relax the check to check that the IP is part
@@ -348,7 +348,7 @@ func ValidateDPUServiceIPAMInL3ModeForMultiDPUCluster(ctx context.Context, input
 		g.Expect(podList.Items).To(HaveLen(1))
 
 		pod := podList.Items[0]
-		ipStr := getPodIPForInterface(pod, "net1")
+		ipStr := getPodIPForInterface(g, pod, "net1")
 		// Note that if the pod is restarted for whatever reason, NVIPAM will allocate the next IP in the block and this
 		// check will fail. This indicates that another issue occurs and should be checked why this happened to identify
 		// potential issues on other components. If this fails a lot, we can relax the check to check that the IP is part

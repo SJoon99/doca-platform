@@ -19,7 +19,6 @@ package redfish
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"time"
 
 	provisioningv1 "github.com/nvidia/doca-platform/api/provisioning/v1alpha1"
@@ -35,12 +34,11 @@ import (
 const (
 	// MaxSafetyLimit is the absolute maximum restarts allowed (defense-in-depth)
 	MaxSafetyLimit = 10
-	// MinRestartInterval is the minimum time between restart triggers (BMC protection)
-	MinRestartInterval = 1 * time.Minute
-	// OSRunningTimeout is how long to wait for OS to boot before failing
-	OSRunningTimeout = 5 * time.Minute
-	// bootProgressOsRunning is the BMC OemLastState value indicating the ARM OS is fully booted
-	bootProgressOsRunning = "OsIsRunning"
+	// MinRestartInterval is the minimum time between restart triggers.
+	// Empirically measured on BF3 hardware: UEFI processing completes (OsStarting
+	// reached) at 67-76s after ForceRestart. 90s provides ~15-23s margin for UEFI
+	// to finish applying BIOS changes (e.g., Secure Boot) before the next restart.
+	MinRestartInterval = 90 * time.Second
 )
 
 // PerformArmForceRestart handles the ARM ForceRestart phase for DPU configuration.
@@ -60,7 +58,6 @@ const (
 //   - Returning nil error = terminal (no requeue) or transition to another phase
 //   - Returning non-nil error = retryable (controller will requeue)
 func PerformArmForceRestart(ctx context.Context, dpu *provisioningv1.DPU, ctrlCtx *dutil.ControllerContext) (provisioningv1.DPUStatus, error) {
-	log := log.FromContext(ctx)
 	state := dpu.Status.DeepCopy()
 
 	// Handle deletion - abort and cleanup
@@ -88,22 +85,7 @@ func PerformArmForceRestart(ctx context.Context, dpu *provisioningv1.DPU, ctrlCt
 		return *state, err // Retryable
 	}
 
-	// Check ARM OS boot state via BMC
-	resp, sysInfo, err := client.GetSystem()
-	if err != nil {
-		log.Error(err, "Failed to get system info from BMC")
-		setArmCondition(state, "FailedToGetSystemState", err.Error())
-		return *state, err // Retryable
-	}
-	if sysInfo == nil || resp.StatusCode() != http.StatusOK {
-		err = fmt.Errorf("unexpected response from BMC: status=%d", resp.StatusCode())
-		log.Error(err, "Failed to get system boot state")
-		setArmCondition(state, "FailedToGetSystemState", err.Error())
-		return *state, err // Retryable
-	}
-	osRunning := sysInfo.BootProgress.OemLastState == bootProgressOsRunning
-
-	return executeRestartStateMachine(ctx, dpu, state, tracker, client, osRunning)
+	return executeRestartStateMachine(ctx, dpu, state, tracker, client)
 }
 
 // validateTracker loads and validates the ARM restart tracker.
@@ -132,7 +114,6 @@ func validateTracker(dpu *provisioningv1.DPU, state *provisioningv1.DPUStatus) (
 
 	// Safety check - prevent infinite loops
 	if tracker.Attempt >= MaxSafetyLimit {
-		dutil.ClearArmRestartTracker(dpu)
 		state.Phase = provisioningv1.DPUError
 		err := fmt.Errorf("exceeded maximum safety limit of %d restart attempts", MaxSafetyLimit)
 		setArmCondition(state, "MaxSafetyLimitExceeded", err.Error())
@@ -160,15 +141,13 @@ func createRedfishClientForDPU(ctx context.Context, dpu *provisioningv1.DPU, ctr
 }
 
 // executeRestartStateMachine runs the core restart logic once tracker and client are ready.
-func executeRestartStateMachine(ctx context.Context, dpu *provisioningv1.DPU, state *provisioningv1.DPUStatus, tracker *dutil.ArmRestartTracker, client *rc.Client, osRunning bool) (provisioningv1.DPUStatus, error) {
+// ForceRestart is a BMC-level hardware reset (ForceOff + On) that works regardless of
+// ARM OS state. MinRestartInterval gates the rate between restarts to ensure UEFI has
+// time to process pending BIOS changes before the next restart is triggered.
+func executeRestartStateMachine(ctx context.Context, dpu *provisioningv1.DPU, state *provisioningv1.DPUStatus, tracker *dutil.ArmRestartTracker, client *rc.Client) (provisioningv1.DPUStatus, error) {
 	log := log.FromContext(ctx)
 
-	// OS is rebooting after a triggered restart - wait or timeout.
-	if !osRunning && tracker.Attempt > 0 {
-		return handleWaitingForBoot(dpu, state, tracker)
-	}
-
-	// All restarts done.
+	// All restarts done — return to InitializeInterface for verification.
 	if tracker.AllRestartsDone() {
 		log.Info("All ARM restarts complete, returning to InitializeInterface",
 			"attempts", tracker.Attempt, "maxAttempts", tracker.MaxAttempts)
@@ -178,22 +157,8 @@ func executeRestartStateMachine(ctx context.Context, dpu *provisioningv1.DPU, st
 		return *state, nil
 	}
 
-	// More restarts needed - trigger next one
+	// More restarts needed - trigger next one (MinRestartInterval enforced in triggerArmRestart)
 	return triggerArmRestart(ctx, dpu, state, tracker, client)
-}
-
-// handleWaitingForBoot handles the case when OS is not yet running after a restart.
-func handleWaitingForBoot(dpu *provisioningv1.DPU, state *provisioningv1.DPUStatus, tracker *dutil.ArmRestartTracker) (provisioningv1.DPUStatus, error) {
-	if !tracker.LastRestartTime.IsZero() && time.Since(tracker.LastRestartTime) > OSRunningTimeout {
-		dutil.ClearArmRestartTracker(dpu)
-		state.Phase = provisioningv1.DPUError
-		err := fmt.Errorf("OS boot timeout after %s", OSRunningTimeout)
-		setArmCondition(state, "OSBootTimeout", err.Error())
-		return *state, nil // Terminal error - don't retry
-	}
-
-	setArmCondition(state, "WaitingForBoot", "Waiting for ARM OS to reach running state")
-	return *state, nil // Requeue via default reconcile interval
 }
 
 // triggerArmRestart triggers a single ARM ForceRestart and updates the tracker.

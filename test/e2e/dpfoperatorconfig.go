@@ -47,6 +47,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
+const (
+	testKubernetesAPIServerVIP  = "192.168.1.1"
+	testKubernetesAPIServerPort = 1111
+)
+
 // ValidateDPFOperatorBaseConfiguration verifies that DPFOperatorConfiguration ContainerComponentConfiguration options work.
 // It changes the images for all system components to arbitrary values, checks that the changes have propagated and then
 // changes them back to their default versions.
@@ -125,11 +130,14 @@ func ValidateDPFOperatorBaseConfiguration(ctx context.Context, input *systemTest
 	modifiedConfig.Spec.NVIPAM = &operatorv1.NVIPAMConfiguration{
 		Controller: &operatorv1.NVIPAMController{
 			ImageComponentConfig: operatorv1.ImageComponentConfig{
-				Image: ptr.To(fmt.Sprintf(imageTemplate, dummyRegistryName, operatorv1.NVIPAMName)),
+				Image: ptr.To(fmt.Sprintf(imageTemplate, dummyRegistryName, operatorv1.NVIPAMControllerName)),
 			},
 			ResourceComponentConfig: dummyResourceRequirements,
 		},
 		Node: &operatorv1.NVIPAMNode{
+			ImageComponentConfig: operatorv1.ImageComponentConfig{
+				Image: ptr.To(fmt.Sprintf(imageTemplate, dummyRegistryName, operatorv1.NVIPAMNodeName)),
+			},
 			ResourceComponentConfig: dummyResourceRequirements,
 		},
 	}
@@ -173,10 +181,10 @@ func ValidateDPFOperatorBaseConfiguration(ctx context.Context, input *systemTest
 		}
 	}
 
-	By("updating the DPFOperatorConfig with modified images and resources")
+	By("Updating the DPFOperatorConfig with modified images and resources")
 	Expect(input.client.Patch(ctx, modifiedConfig, client.MergeFrom(originalConfig))).To(Succeed())
 
-	By("verifying all components are updated")
+	By("Verifying all components are updated")
 	verifyComponentOverrides(ctx, input, dummyRegistryName, expectedDummyResources)
 
 	dummyRegistryName = "overridden-registry.com"
@@ -192,7 +200,8 @@ func ValidateDPFOperatorBaseConfiguration(ctx context.Context, input *systemTest
 	modifiedConfig.Spec.SFCController.Controller.Image = nil
 	modifiedConfig.Spec.SFCController.Image = ptr.To(fmt.Sprintf(imageTemplate, dummyRegistryName, operatorv1.SFCControllerName))
 	modifiedConfig.Spec.NVIPAM.Controller.Image = nil
-	modifiedConfig.Spec.NVIPAM.Image = ptr.To(fmt.Sprintf(imageTemplate, dummyRegistryName, operatorv1.NVIPAMName))
+	modifiedConfig.Spec.NVIPAM.Node.Image = nil
+	modifiedConfig.Spec.NVIPAM.Image = ptr.To(fmt.Sprintf(imageTemplate, dummyRegistryName, operatorv1.NVIPAMControllerName))
 	modifiedConfig.Spec.ProvisioningController.Controller.Image = nil
 	modifiedConfig.Spec.ProvisioningController.Image = ptr.To(fmt.Sprintf(imageTemplate, dummyRegistryName, operatorv1.ProvisioningControllerName))
 	modifiedConfig.Spec.DPUServiceController.Controller.Image = nil
@@ -208,10 +217,10 @@ func ValidateDPFOperatorBaseConfiguration(ctx context.Context, input *systemTest
 	}
 	Expect(input.client.Patch(ctx, modifiedConfig, client.MergeFrom(configCopy))).To(Succeed())
 
-	By("verifying legacy component overrides")
+	By("Verifying legacy component overrides")
 	verifyComponentOverrides(ctx, input, dummyRegistryName, expectedDummyResources)
 
-	By("reverting the DPFOperatorConfig to its original setting.")
+	By("Reverting the DPFOperatorConfig to its original setting")
 	Eventually(func(g Gomega) {
 		g.Expect(input.client.Get(ctx, client.ObjectKeyFromObject(modifiedConfig), modifiedConfig)).To(Succeed())
 		resetConfig := modifiedConfig.DeepCopy()
@@ -228,15 +237,13 @@ func verifyComponentOverrides(ctx context.Context, input *systemTestInput, dummy
 	Eventually(func(g Gomega) {
 		inClusterDeploymentDPUServices := map[operatorv1.ComponentName]bool{
 			operatorv1.ServiceSetControllerName: true,
-		}
-		deploymentDPUservices := map[operatorv1.ComponentName]bool{
-			operatorv1.NVIPAMName: true,
+			operatorv1.NVIPAMControllerName:     true,
 		}
 		daemonSetDPUServices := map[operatorv1.ComponentName]bool{
 			operatorv1.SRIOVDevicePluginName: true,
 			operatorv1.SFCControllerName:     true,
 			operatorv1.OVSCNIName:            true,
-			operatorv1.NVIPAMName:            true,
+			operatorv1.NVIPAMNodeName:        true,
 			operatorv1.MultusName:            true,
 			operatorv1.FlannelName:           true,
 		}
@@ -272,16 +279,10 @@ func verifyComponentOverrides(ctx context.Context, input *systemTestInput, dummy
 
 		// Verify overrides for inCluster DPUServices
 		for name := range inClusterDeploymentDPUServices {
-			n := name.String()
-			if name == operatorv1.ServiceSetControllerName {
-				n = getServiceChainSetControllerDPUServiceName(input.dpuClusters[0].Name, input.dpuClusters[0].Namespace)
-			}
+			n := getPerClusterDPUServiceName(name, input.dpuClusters[0].Name, input.dpuClusters[0].Namespace)
 			deployValidation(input.client, "in-cluster", n)
 		}
 		// Verify overrides in the DPUClusters
-		for name := range deploymentDPUservices {
-			deployValidation(dpuClusterClient[0], input.dpuClusters[0].Name, name.String())
-		}
 		for name := range daemonSetDPUServices {
 			nameForCluster := fmt.Sprintf("%s-%s", input.dpuClusters[0].Name, name)
 			tracker.By(nameForCluster, "verifying overrides for %s", nameForCluster)
@@ -319,32 +320,32 @@ func verifyComponentOverrides(ctx context.Context, input *systemTestInput, dummy
 }
 
 func ValidateDPFOperatorMTUCurrentConfiguration(ctx context.Context, input *systemTestInput) {
-	By("verify flannel configmap for cluster " + input.dpuClusters[0].Name)
+	By("Verify flannel configmap for cluster " + input.dpuClusters[0].Name)
 	flannelConfigMap := &corev1.ConfigMap{}
 	Expect(dpuClusterClient[0].Get(ctx, client.ObjectKey{Namespace: dpfOperatorSystemNamespace, Name: "kube-flannel-cfg"}, flannelConfigMap)).To(Succeed())
 	Expect(flannelConfigMap.Data["net-conf.json"]).To(ContainSubstring("MTU\": 1500,"))
 }
 
 func ValidateDPFOperatorMTUConfigurationChange(ctx context.Context, input *systemTestInput) {
-	By("get the operatorConfig")
+	By("Get the operatorConfig")
 	modifiedConfig := &operatorv1.DPFOperatorConfig{}
 	Expect(input.client.Get(ctx, client.ObjectKey{Namespace: dpfOperatorSystemNamespace, Name: configName}, modifiedConfig)).To(Succeed())
-	By("update the MTU in the operatorConfig")
+	By("Update the MTU in the operatorConfig")
 	originalConfig := modifiedConfig.DeepCopy()
 	if modifiedConfig.Spec.Networking == nil {
 		modifiedConfig.Spec.Networking = &operatorv1.Networking{}
 	}
-	modifiedConfig.Spec.Networking.ControlPlaneMTU = ptr.To(1300)
+	modifiedConfig.Spec.Networking.ControlPlaneMTU = ptr.To(testMTUValue)
 	modifiedConfig.Spec.Networking.HighSpeedMTU = ptr.To(9000)
 	Eventually(func(g Gomega) {
 		g.Expect(input.client.Patch(ctx, modifiedConfig, client.MergeFrom(originalConfig))).To(Succeed())
 	}).Should(Succeed())
 
-	By("verify flannel and multus for cluster " + input.dpuClusters[0].Name)
+	By("Verify flannel and multus for cluster " + input.dpuClusters[0].Name)
 	Eventually(func(g Gomega) {
 		flannelConfigMap := &corev1.ConfigMap{}
 		g.Expect(dpuClusterClient[0].Get(ctx, client.ObjectKey{Namespace: dpfOperatorSystemNamespace, Name: "kube-flannel-cfg"}, flannelConfigMap)).To(Succeed())
-		g.Expect(flannelConfigMap.Data["net-conf.json"]).To(ContainSubstring("MTU\": 1300,"))
+		g.Expect(flannelConfigMap.Data["net-conf.json"]).To(ContainSubstring(fmt.Sprintf(`MTU": %d`, testMTUValue)))
 
 		netAttachDef := &unstructured.Unstructured{}
 		netAttachDef.SetGroupVersionKind(schema.GroupVersionKind{
@@ -366,7 +367,7 @@ func ValidateDPFOperatorMTUConfigurationChange(ctx context.Context, input *syste
 		g.Expect(netAttachConfig).To(ContainSubstring("mtu\": 9000,"))
 	}, time.Second*30).Should(Succeed())
 
-	By("reverting the DPFOperatorConfig to its original setting.")
+	By("Reverting the DPFOperatorConfig to its original setting")
 	Eventually(func(g Gomega) {
 		g.Expect(input.client.Get(ctx, client.ObjectKeyFromObject(modifiedConfig), modifiedConfig)).To(Succeed())
 		resetConfig := modifiedConfig.DeepCopy()
@@ -378,10 +379,10 @@ func ValidateDPFOperatorMTUConfigurationChange(ctx context.Context, input *syste
 }
 
 func ValidateDPFOperatorFlannelPodCIDRChange(ctx context.Context, input *systemTestInput) {
-	By("get the operatorConfig")
+	By("Get the operatorConfig")
 	modifiedConfig := &operatorv1.DPFOperatorConfig{}
 	Expect(input.client.Get(ctx, client.ObjectKey{Namespace: dpfOperatorSystemNamespace, Name: configName}, modifiedConfig)).To(Succeed())
-	By("update the podCIDR in the operatorConfig")
+	By("Update the podCIDR in the operatorConfig")
 	originalConfig := modifiedConfig.DeepCopy()
 	if modifiedConfig.Spec.Flannel == nil {
 		modifiedConfig.Spec.Flannel = &operatorv1.FlannelConfiguration{}
@@ -391,14 +392,14 @@ func ValidateDPFOperatorFlannelPodCIDRChange(ctx context.Context, input *systemT
 		g.Expect(input.client.Patch(ctx, modifiedConfig, client.MergeFrom(originalConfig))).To(Succeed())
 	}).Should(Succeed())
 
-	By("verify flannel configmap for cluster " + input.dpuClusters[0].Name)
+	By("Verify flannel configmap for cluster " + input.dpuClusters[0].Name)
 	Eventually(func(g Gomega) {
 		flannelConfigMap := &corev1.ConfigMap{}
 		g.Expect(dpuClusterClient[0].Get(ctx, client.ObjectKey{Namespace: dpfOperatorSystemNamespace, Name: "kube-flannel-cfg"}, flannelConfigMap)).To(Succeed())
 		g.Expect(flannelConfigMap.Data["net-conf.json"]).To(ContainSubstring("10.255.0.0/14"))
 	}, time.Second*30).Should(Succeed())
 
-	By("reverting the DPFOperatorConfig to its original setting.")
+	By("Reverting the DPFOperatorConfig to its original setting")
 	Eventually(func(g Gomega) {
 		g.Expect(input.client.Get(ctx, client.ObjectKeyFromObject(modifiedConfig), modifiedConfig)).To(Succeed())
 		resetConfig := modifiedConfig.DeepCopy()
@@ -414,7 +415,7 @@ func ValidateDPFOperatorMaxDPUParallelInstallations(ctx context.Context, input *
 	Expect(input.client.Get(ctx, client.ObjectKey{Namespace: dpfOperatorSystemNamespace, Name: configName}, modifiedConfig)).To(Succeed())
 	originalConfig := modifiedConfig.DeepCopy()
 
-	By("getting the current provisioning controller pod UIDs")
+	By("Getting the current provisioning controller pod UIDs")
 	var originalPodUIDs []types.UID
 	Eventually(func(g Gomega) {
 		pods := corev1.PodList{}
@@ -427,11 +428,11 @@ func ValidateDPFOperatorMaxDPUParallelInstallations(ctx context.Context, input *
 		}
 	}).WithTimeout(120 * time.Second).Should(Succeed())
 
-	By("modifying the DPFOperatorConfig to set MaxDPUParallelInstallations")
+	By("Modifying the DPFOperatorConfig to set MaxDPUParallelInstallations")
 	modifiedConfig.Spec.ProvisioningController.MaxDPUParallelInstallations = ptr.To(int32(25))
 	Expect(input.client.Patch(ctx, modifiedConfig, client.MergeFrom(originalConfig))).To(Succeed())
 
-	By("verifying that the provisioning controller pod is restarted")
+	By("Verifying that the provisioning controller pod is restarted")
 	var restartedPodUIDs []types.UID
 	Eventually(func(g Gomega) {
 		pods := corev1.PodList{}
@@ -456,7 +457,7 @@ func ValidateDPFOperatorMaxDPUParallelInstallations(ctx context.Context, input *
 		}
 	}).WithTimeout(120 * time.Second).Should(Succeed())
 
-	By("reverting the DPFOperatorConfig to its original setting")
+	By("Reverting the DPFOperatorConfig to its original setting")
 	Eventually(func(g Gomega) {
 		g.Expect(input.client.Get(ctx, client.ObjectKeyFromObject(modifiedConfig), modifiedConfig)).To(Succeed())
 		resetConfig := modifiedConfig.DeepCopy()
@@ -464,7 +465,7 @@ func ValidateDPFOperatorMaxDPUParallelInstallations(ctx context.Context, input *
 		g.Expect(input.client.Patch(ctx, resetConfig, client.MergeFrom(modifiedConfig))).To(Succeed())
 	}).WithTimeout(10 * time.Second).Should(Succeed())
 
-	By("verifying that the provisioning controller pod is restarted again")
+	By("Verifying that the provisioning controller pod is restarted again")
 	Eventually(func(g Gomega) {
 		pods := corev1.PodList{}
 		g.Expect(input.client.List(ctx, &pods,
@@ -509,7 +510,7 @@ func ValidateDPFOperatorPathConfiguration(ctx context.Context, input *systemTest
 	dpuServiceDaemonSetsWithPathChanges := map[operatorv1.ComponentName]bool{
 		operatorv1.SFCControllerName: true,
 		operatorv1.OVSCNIName:        true,
-		operatorv1.NVIPAMName:        true,
+		operatorv1.NVIPAMNodeName:    true,
 		operatorv1.MultusName:        true,
 		operatorv1.FlannelName:       true,
 	}
@@ -540,7 +541,7 @@ func ValidateDPFOperatorPathConfiguration(ctx context.Context, input *systemTest
 			case operatorv1.OVSCNIName:
 				g.Expect(volumeNameHasPath("cnibin", volumes, filepath.Join(modifiedCNIBinPath))).To(BeTrue())
 				g.Expect(volumeNameHasPath("ovs-var-run", volumes, filepath.Join(modifiedOVSRunPath))).To(BeTrue())
-			case operatorv1.NVIPAMName:
+			case operatorv1.NVIPAMNodeName:
 				g.Expect(volumeNameHasPath("cnibin", volumes, filepath.Join(modifiedCNIBinPath))).To(BeTrue())
 				g.Expect(volumeNameHasPath("cniconf", volumes, filepath.Join(modifiedCNIConfigPath, "nv-ipam.d"))).To(BeTrue())
 			case operatorv1.MultusName:
@@ -570,7 +571,7 @@ func ValidateDPFOperatorPathConfiguration(ctx context.Context, input *systemTest
 		}
 	}).WithTimeout(120 * time.Second).Should(Succeed())
 
-	By("reverting the DPFOperatorConfig to its original setting.")
+	By("Reverting the DPFOperatorConfig to its original setting")
 	Eventually(func(g Gomega) {
 		g.Expect(input.client.Get(ctx, client.ObjectKeyFromObject(modifiedConfig), modifiedConfig)).To(Succeed())
 		resetConfig := modifiedConfig.DeepCopy()
@@ -596,21 +597,21 @@ func volumeNameHasPath(name string, volumes []corev1.Volume, path string) bool {
 // propagated correctly to the DMS pods.
 func ValidateDPFOperatorKubernetesAPIServerVIPAndPort(ctx context.Context, input *systemTestInput) {
 	if !input.hasDpuNodes() {
-		Skip("test requires node to trigger provisioning on, skipping")
+		Skip("Test requires node to trigger provisioning on, skipping")
 	}
 
 	modifiedConfig := &operatorv1.DPFOperatorConfig{}
 	Expect(input.client.Get(ctx, client.ObjectKey{Namespace: dpfOperatorSystemNamespace, Name: configName}, modifiedConfig)).To(Succeed())
 	originalConfig := modifiedConfig.DeepCopy()
 
-	By("modifying the DPFOperatorConfig to set the Kubernetes API Server related variables")
+	By("Modifying the DPFOperatorConfig to set the Kubernetes API Server related variables")
 	modifiedConfig.Spec.Overrides = &operatorv1.Overrides{
-		KubernetesAPIServerVIP:  ptr.To("192.168.1.1"),
-		KubernetesAPIServerPort: ptr.To(1111),
+		KubernetesAPIServerVIP:  ptr.To(testKubernetesAPIServerVIP),
+		KubernetesAPIServerPort: ptr.To(testKubernetesAPIServerPort),
 	}
 	Expect(input.client.Patch(ctx, modifiedConfig, client.MergeFrom(originalConfig))).To(Succeed())
 
-	By("validating that the provisioning controller pod has the correct argument")
+	By("Validating that the provisioning controller pod has the correct argument")
 	Eventually(func(g Gomega) {
 		pods := corev1.PodList{}
 		g.Expect(input.client.List(ctx, &pods,
@@ -620,37 +621,36 @@ func ValidateDPFOperatorKubernetesAPIServerVIPAndPort(ctx context.Context, input
 		g.Expect(pods.Items).ToNot(BeEmpty())
 		for _, pod := range pods.Items {
 			g.Expect(pod.Spec.Containers).To(HaveLen(1))
-			g.Expect(pod.Spec.Containers[0].Args).To(ContainElement("--dms-pod-envs=KUBERNETES_SERVICE_HOST=192.168.1.1,KUBERNETES_SERVICE_PORT=1111"))
+			g.Expect(pod.Spec.Containers[0].Args).To(ContainElement(fmt.Sprintf("--dms-pod-envs=KUBERNETES_SERVICE_HOST=%s,KUBERNETES_SERVICE_PORT=%d", testKubernetesAPIServerVIP, testKubernetesAPIServerPort)))
 		}
 	}).WithTimeout(120 * time.Second).Should(Succeed())
 
-	By("Triggering recreation DMS Pod")
+	By("Triggering DMS Pod recreation")
 	triggerDMSRecreation(ctx, input.client)
 
-	By("validating that all the dms containers have the environment variables set correctly")
+	By("Validating that all the DMS containers have the environment variables set correctly")
 	Eventually(func(g Gomega) {
 		pods := corev1.PodList{}
 		g.Expect(input.client.List(ctx, &pods,
 			client.MatchingLabels{cutil.ProvisioningComponentLabelKey: "hostagent"})).To(Succeed())
 		g.Expect(pods.Items).ToNot(BeEmpty())
 		for _, pod := range pods.Items {
-			containers := slices.Concat(pod.Spec.InitContainers, pod.Spec.Containers)
-			for _, container := range containers {
+			for _, container := range pod.Spec.Containers {
 				g.Expect(container.Env).To(ContainElements([]corev1.EnvVar{
 					{
 						Name:  "KUBERNETES_SERVICE_HOST",
-						Value: "192.168.1.1",
+						Value: testKubernetesAPIServerVIP,
 					},
 					{
 						Name:  "KUBERNETES_SERVICE_PORT",
-						Value: "1111",
+						Value: fmt.Sprintf("%d", testKubernetesAPIServerPort),
 					},
 				}))
 			}
 		}
 	}).WithTimeout(120 * time.Second).Should(Succeed())
 
-	By("reverting the DPFOperatorConfig to its original setting")
+	By("Reverting the DPFOperatorConfig to its original setting")
 	Eventually(func(g Gomega) {
 		g.Expect(input.client.Get(ctx, client.ObjectKeyFromObject(modifiedConfig), modifiedConfig)).To(Succeed())
 		resetConfig := modifiedConfig.DeepCopy()
@@ -658,7 +658,7 @@ func ValidateDPFOperatorKubernetesAPIServerVIPAndPort(ctx context.Context, input
 		g.Expect(input.client.Patch(ctx, resetConfig, client.MergeFrom(modifiedConfig))).To(Succeed())
 	}).WithTimeout(10 * time.Second).Should(Succeed())
 
-	By("validating that the provisioning controller pod has the correct argument")
+	By("Validating that the provisioning controller pod has the correct argument")
 	Eventually(func(g Gomega) {
 		pods := corev1.PodList{}
 		g.Expect(input.client.List(ctx, &pods,
@@ -667,14 +667,14 @@ func ValidateDPFOperatorKubernetesAPIServerVIPAndPort(ctx context.Context, input
 		g.Expect(pods.Items).ToNot(BeEmpty())
 		for _, pod := range pods.Items {
 			g.Expect(pod.Spec.Containers).To(HaveLen(1))
-			g.Expect(pod.Spec.Containers[0].Args).ToNot(ContainElement("--dms-pod-envs=KUBERNETES_SERVICE_HOST=192.168.1.1,KUBERNETES_SERVICE_PORT=1111"))
+			g.Expect(pod.Spec.Containers[0].Args).ToNot(ContainElement(fmt.Sprintf("--dms-pod-envs=KUBERNETES_SERVICE_HOST=%s,KUBERNETES_SERVICE_PORT=%d", testKubernetesAPIServerVIP, testKubernetesAPIServerPort)))
 		}
 	}).WithTimeout(120 * time.Second).Should(Succeed())
 
-	By("Triggering recreation DMS Pod")
+	By("Triggering DMS Pod recreation")
 	triggerDMSRecreation(ctx, input.client)
 
-	By("validating that the dms containers do not have the env variables anymore")
+	By("Validating that the DMS containers do not have the env variables anymore")
 	Eventually(func(g Gomega) {
 		pods := corev1.PodList{}
 		g.Expect(input.client.List(ctx, &pods,
@@ -686,11 +686,11 @@ func ValidateDPFOperatorKubernetesAPIServerVIPAndPort(ctx context.Context, input
 				g.Expect(container.Env).ToNot(ContainElements([]corev1.EnvVar{
 					{
 						Name:  "KUBERNETES_SERVICE_HOST",
-						Value: "192.168.1.1",
+						Value: testKubernetesAPIServerVIP,
 					},
 					{
 						Name:  "KUBERNETES_SERVICE_PORT",
-						Value: "1111",
+						Value: fmt.Sprintf("%d", testKubernetesAPIServerPort),
 					},
 				}))
 			}
@@ -736,7 +736,7 @@ func triggerDMSRecreation(ctx context.Context, c client.Client) {
 func ValidateDPFOperatorConfigCleanupPrerequisites(ctx context.Context, input *systemTestInput) {
 	// Use case, 2 DPUServiceInterfaces, one created by DPUDeployment and a standalone. The DPF Operator should be able
 	// to delete those gracefully without stuck finalizers due to sfc-controller missing in the DPU Cluster.
-	By("verify DPUServiceInterface owned by DPUDeployment exists and is not removed by previous tests")
+	By("Verify DPUServiceInterface owned by DPUDeployment exists and is not removed by previous tests")
 	dpuServiceInterfaceList := &dpuservicev1.DPUServiceInterfaceList{}
 	Expect(input.client.List(ctx, dpuServiceInterfaceList, client.HasLabels{dpuservicev1.ParentDPUDeploymentNameLabel})).To(Succeed())
 	Expect(dpuServiceInterfaceList.Items).ToNot(BeEmpty())
@@ -745,16 +745,16 @@ func ValidateDPFOperatorConfigCleanupPrerequisites(ctx context.Context, input *s
 		dpuDeploymentOwnedServiceInterfaceLabels = append(dpuDeploymentOwnedServiceInterfaceLabels, dpuServiceInterface.Spec.Template.Spec.Template.Labels)
 	}
 
-	By("create DPUServiceInterface and check that it is mirrored to each cluster")
+	By("Create DPUServiceInterface and check that it is mirrored to each cluster")
 	dpuServiceInterfaceName := "pf0-vf2"
 	dpuServiceInterfaceNamespace := "test-dpfoperatorconfig-removal"
 
-	By("create test namespace")
+	By("Create test namespace")
 	testNS := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: dpuServiceInterfaceNamespace}}
 	testNS.SetLabels(CleanupScope.Suite)
 	Expect(input.client.Create(ctx, testNS)).To(Succeed())
 
-	By("create DPUServiceInterface")
+	By("Create DPUServiceInterface")
 	dpuServiceInterface := input.dpuServiceInterface.DeepCopy()
 	dpuServiceInterface.SetName(dpuServiceInterfaceName)
 	dpuServiceInterface.SetNamespace(dpuServiceInterfaceNamespace)
@@ -763,7 +763,7 @@ func ValidateDPFOperatorConfigCleanupPrerequisites(ctx context.Context, input *s
 	Expect(input.client.Create(ctx, dpuServiceInterface)).To(Succeed())
 
 	if input.hasDpuNodes() {
-		By(fmt.Sprintf("verify ServiceInterface is created in %d nodes", input.totalDPUs()))
+		By(fmt.Sprintf("Verify ServiceInterface is created in %d nodes", input.totalDPUs()))
 		Eventually(func(g Gomega) {
 			// Expect ServiceInterface for standalone DPUServiceInterface to be created.
 			// ServiceInterface objects are created per K8s node in the DPU cluster, and each DPU device
@@ -783,14 +783,14 @@ func ValidateDPFOperatorConfigCleanupPrerequisites(ctx context.Context, input *s
 }
 
 func DeleteDPFOperatorConfig(ctx context.Context, testClient client.Client) {
-	By("delete the operatorConfig and ensure it is deleted")
+	By("Delete the operatorConfig and ensure it is deleted")
 	Eventually(func(g Gomega) {
 		key := client.ObjectKey{Namespace: dpfOperatorSystemNamespace, Name: configName}
 		g.Expect(client.IgnoreNotFound(testClient.DeleteAllOf(ctx, &operatorv1.DPFOperatorConfig{}, client.InNamespace(dpfOperatorSystemNamespace)))).To(Succeed())
 		g.Expect(apierrors.IsNotFound(testClient.Get(ctx, key, &operatorv1.DPFOperatorConfig{}))).To(BeTrue())
 	}).WithTimeout(time.Hour).WithPolling(30 * time.Second).Should(Succeed())
 	// TODO: Remove once DPUSets implement foreground deletion
-	By("ensure no leftover resources")
+	By("Ensure no leftover resources")
 	// Check that all the DPUs are removed. This test in particular is needed because the DPUSet controller does not implement
 	// foreground deletion, which might let DPUs lingering in Deleting without being able to delete.
 	Eventually(func(g Gomega) {
@@ -800,7 +800,7 @@ func DeleteDPFOperatorConfig(ctx context.Context, testClient client.Client) {
 	}).WithTimeout(30 * time.Second).Should(Succeed())
 }
 
-// getServiceChainSetControllerDPUServiceName returns the ServiceChainSetController DPUService name per cluster
-func getServiceChainSetControllerDPUServiceName(clusterName string, clusterNamespace string) string {
-	return fmt.Sprintf("%s-%s", operatorv1.ServiceSetControllerName, digest.Short(digest.FromObjects(clusterName, clusterNamespace), 10))
+// getPerClusterDPUServiceName returns the per-cluster DPUService name for a given component and DPUCluster.
+func getPerClusterDPUServiceName(componentName operatorv1.ComponentName, clusterName string, clusterNamespace string) string {
+	return fmt.Sprintf("%s-%s", componentName, digest.Short(digest.FromObjects(clusterName, clusterNamespace), 10))
 }

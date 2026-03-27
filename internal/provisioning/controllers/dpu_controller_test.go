@@ -24,6 +24,8 @@ import (
 
 	operatorv1 "github.com/nvidia/doca-platform/api/operator/v1alpha1"
 	provisioningv1 "github.com/nvidia/doca-platform/api/provisioning/v1alpha1"
+	"github.com/nvidia/doca-platform/internal/provisioning/bfbregistry"
+	dpuctrl "github.com/nvidia/doca-platform/internal/provisioning/controllers/dpu"
 	dutil "github.com/nvidia/doca-platform/internal/provisioning/controllers/dpu/util"
 	cutil "github.com/nvidia/doca-platform/internal/provisioning/controllers/util"
 	"github.com/nvidia/doca-platform/internal/provisioning/controllers/util/reboot"
@@ -39,6 +41,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	utilrand "k8s.io/apimachinery/pkg/util/rand"
 	"k8s.io/utils/ptr"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -600,5 +603,147 @@ var _ = Describe("DPU", func() {
 				Expect(fetchedDPUNodeMaintenance.Spec.Requestor).To(ContainElements("service-2", "service-3"))
 			})
 		})
+
+		Context("bfb-registry", func() {
+			const (
+				leaderPodName = "provisioning-leader"
+				nodeName      = "node-1"
+				registryImage = "registry:8082"
+			)
+
+			It("Reconcile creates bfb-registry pod and service when request is for bfb-registry and env is set", func() {
+				ctx := context.Background()
+				restore := setEnvForBFBRegistry(leaderPodName, nodeName, registryImage)
+				defer restore()
+
+				By("deleting any stale bfb-registry Service/Pod so reconcile can create fresh objects")
+				Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, &corev1.Service{
+					ObjectMeta: metav1.ObjectMeta{Name: bfbregistry.PodName, Namespace: testNS.Name},
+				}))).To(Succeed())
+				Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, &corev1.Pod{
+					ObjectMeta: metav1.ObjectMeta{Name: bfbregistry.PodName, Namespace: testNS.Name},
+				}))).To(Succeed())
+
+				By("creating the leader pod in test namespace")
+				leaderPod := &corev1.Pod{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      leaderPodName,
+						Namespace: testNS.Name,
+						UID:       "leader-uid",
+					},
+					Spec: corev1.PodSpec{
+						NodeName: nodeName,
+						Containers: []corev1.Container{
+							{Name: "manager", Image: "provisioning-controller:test"},
+						},
+					},
+				}
+				Expect(k8sClient.Create(ctx, leaderPod)).To(Succeed())
+
+				By("calling Reconcile for bfb-registry")
+				req := ctrl.Request{
+					NamespacedName: types.NamespacedName{Namespace: testNS.Name, Name: bfbregistry.PodName},
+				}
+				Eventually(func(g Gomega) {
+					_, err := dpuReconciler.Reconcile(ctx, req)
+					g.Expect(err).NotTo(HaveOccurred())
+				}).WithTimeout(5 * time.Second).WithPolling(200 * time.Millisecond).Should(Succeed())
+
+				By("verifying bfb-registry pod and service exist")
+				pod := &corev1.Pod{}
+				Expect(k8sClient.Get(ctx, client.ObjectKey{Namespace: testNS.Name, Name: bfbregistry.PodName}, pod)).To(Succeed())
+				Expect(pod.Labels[bfbregistry.LabelDPUComponent]).To(Equal(bfbregistry.LabelValue))
+				svc := &corev1.Service{}
+				Expect(k8sClient.Get(ctx, client.ObjectKey{Namespace: testNS.Name, Name: bfbregistry.PodName}, svc)).To(Succeed())
+				Expect(svc.Spec.Type).To(Equal(corev1.ServiceTypeNodePort))
+
+				By("releasing bfb-registry resources for other tests")
+				DeferCleanup(func() {
+					_ = k8sClient.Delete(ctx, &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: bfbregistry.PodName, Namespace: testNS.Name}})
+					_ = k8sClient.Delete(ctx, &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: bfbregistry.PodName, Namespace: testNS.Name}})
+				})
+			})
+
+			It("Reconcile for bfb-registry returns no error when env is unset (skip non-leader)", func() {
+				ctx := context.Background()
+				restore := setEnvForBFBRegistry("", "", "")
+				defer restore()
+
+				req := ctrl.Request{
+					NamespacedName: types.NamespacedName{Namespace: testNS.Name, Name: bfbregistry.PodName},
+				}
+				_, err := dpuReconciler.Reconcile(ctx, req)
+				Expect(err).NotTo(HaveOccurred())
+			})
+		})
 	})
 })
+
+var _ = Describe("DPU UpdateDPUStatus", func() {
+	It("leaves PreviousPhase unset when Phase first becomes non-empty from empty (optional)", func() {
+		dpu := &provisioningv1.DPU{}
+		dpu.Status = provisioningv1.DPUStatus{Phase: ""}
+		next := provisioningv1.DPUStatus{Phase: provisioningv1.DPUInitializing}
+		Expect(dpuctrl.UpdateDPUStatus(dpu, next)).To(BeTrue())
+		Expect(dpu.Status.PreviousPhase).To(BeEmpty())
+		Expect(dpu.Status.Phase).To(Equal(provisioningv1.DPUInitializing))
+	})
+	It("does not set PreviousPhase when handler status equals current (even if both omit PreviousPhase)", func() {
+		dpu := &provisioningv1.DPU{}
+		dpu.Status = provisioningv1.DPUStatus{Phase: provisioningv1.DPUInitializing}
+		next := provisioningv1.DPUStatus{Phase: provisioningv1.DPUInitializing}
+		Expect(dpuctrl.UpdateDPUStatus(dpu, next)).To(BeFalse())
+		Expect(dpu.Status.PreviousPhase).To(BeEmpty())
+	})
+	It("records prior phase when Phase changes from a non-empty Phase", func() {
+		dpu := &provisioningv1.DPU{}
+		dpu.Status = provisioningv1.DPUStatus{Phase: provisioningv1.DPUInitializing}
+		next := provisioningv1.DPUStatus{Phase: provisioningv1.DPUPending}
+		Expect(dpuctrl.UpdateDPUStatus(dpu, next)).To(BeTrue())
+		Expect(dpu.Status.PreviousPhase).To(Equal(provisioningv1.DPUInitializing))
+		Expect(dpu.Status.Phase).To(Equal(provisioningv1.DPUPending))
+	})
+	It("does not overwrite PreviousPhase when only non-phase status fields change", func() {
+		dpu := &provisioningv1.DPU{}
+		dpu.Status = provisioningv1.DPUStatus{
+			Phase: provisioningv1.DPUPending, PreviousPhase: provisioningv1.DPUInitializing,
+			Conditions: []metav1.Condition{{Type: "A", Status: metav1.ConditionFalse}},
+		}
+		next := provisioningv1.DPUStatus{
+			Phase: provisioningv1.DPUPending, PreviousPhase: provisioningv1.DPUInitializing,
+			Conditions: []metav1.Condition{{Type: "A", Status: metav1.ConditionTrue}},
+		}
+		Expect(dpuctrl.UpdateDPUStatus(dpu, next)).To(BeFalse())
+		Expect(dpu.Status.PreviousPhase).To(Equal(provisioningv1.DPUInitializing))
+		Expect(dpu.Status.Phase).To(Equal(provisioningv1.DPUPending))
+		Expect(dpu.Status.Conditions[0].Status).To(Equal(metav1.ConditionTrue))
+	})
+	It("preserves PreviousPhase when phase unchanged", func() {
+		dpu := &provisioningv1.DPU{}
+		dpu.Status = provisioningv1.DPUStatus{Phase: provisioningv1.DPUPending, PreviousPhase: provisioningv1.DPUInitializing}
+		next := provisioningv1.DPUStatus{Phase: provisioningv1.DPUPending, PreviousPhase: provisioningv1.DPUInitializing}
+		Expect(dpuctrl.UpdateDPUStatus(dpu, next)).To(BeFalse())
+		Expect(dpu.Status.PreviousPhase).To(Equal(provisioningv1.DPUInitializing))
+	})
+})
+
+// setEnvForBFBRegistry sets POD_NAME, NODE_NAME, BFB_REGISTRY_IMAGE and returns a restore func.
+func setEnvForBFBRegistry(podName, nodeName, registryImage string) func() {
+	old := map[string]string{
+		"POD_NAME":           os.Getenv("POD_NAME"),
+		"NODE_NAME":          os.Getenv("NODE_NAME"),
+		"BFB_REGISTRY_IMAGE": os.Getenv("BFB_REGISTRY_IMAGE"),
+	}
+	Expect(os.Setenv("POD_NAME", podName)).To(Succeed())
+	Expect(os.Setenv("NODE_NAME", nodeName)).To(Succeed())
+	Expect(os.Setenv("BFB_REGISTRY_IMAGE", registryImage)).To(Succeed())
+	return func() {
+		for k, v := range old {
+			if v == "" {
+				Expect(os.Unsetenv(k)).To(Succeed())
+			} else {
+				Expect(os.Setenv(k, v)).To(Succeed())
+			}
+		}
+	}
+}

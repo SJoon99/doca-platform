@@ -649,6 +649,7 @@ type NVIPAMController struct {
 }
 
 type NVIPAMNode struct {
+	ImageComponentConfig    `json:",inline"`
 	ResourceComponentConfig `json:",inline"`
 }
 
@@ -661,6 +662,9 @@ func (c *NVIPAMConfiguration) GetImages() map[ContainerName]*string {
 	images := make(map[ContainerName]*string)
 	if c.Controller != nil {
 		images[NVIPAMContainerController] = c.Controller.GetImage()
+	}
+	if c.Node != nil {
+		images[NVIPAMContainerNode] = c.Node.GetImage()
 	}
 	return images
 }
@@ -677,7 +681,7 @@ func (c *NVIPAMConfiguration) GetResources() map[ContainerName]*corev1.ResourceR
 }
 
 func (c *NVIPAMConfiguration) Name() string {
-	return NVIPAMName.String()
+	return NVIPAMControllerName.String()
 }
 
 // +kubebuilder:validation:XValidation:rule="!has(self.image) || !has(self.deviceplugin) || !has(self.deviceplugin.image)",message="only either 'image' (deprecated) or 'deviceplugin.image' can be set, but not both"
@@ -988,11 +992,18 @@ type OpenTelemetryCollectorConfiguration struct {
 	// +optional
 	Daemon *DefaultOverridesConfiguration `json:"daemon,omitempty"`
 
-	// Endpoint is the OTLP endpoint where the DPU cluster opentelemetry-collector sends logs and metrics.
-	// This could be the management cluster's opentelemetry-collector endpoint.
-	// If not specified, logs will not be forwarded from DPU clusters.
+	// Logging contains the configuration for the opentelemetry-collector logging component.
+	// If not specified, logging will not be streamed.
 	// +optional
-	Endpoint *string `json:"endpoint,omitempty"`
+	Logging *OpenTelemetryCollectorLoggingConfiguration `json:"logging,omitempty"`
+}
+
+type OpenTelemetryCollectorLoggingConfiguration struct {
+	// Endpoint is the OTLP endpoint where the DPU cluster opentelemetry-collector sends data to.
+	// This could be the management cluster's opentelemetry-collector endpoint.
+	// If not specified, nothing will be forwarded from DPU clusters.
+	// +required
+	Endpoint string `json:"endpoint,omitempty"`
 }
 
 func (c *OpenTelemetryCollectorConfiguration) Name() string {

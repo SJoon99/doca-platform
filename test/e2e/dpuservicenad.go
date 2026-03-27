@@ -105,13 +105,13 @@ func ValidateDPUServiceNADConsumedByPod(ctx context.Context, input *systemTestIn
 }
 
 func ValidateDPUServiceNADMetrics(ctx context.Context) {
-	By("verify DPUServiceNAD metrics in KSM")
+	By("Verify DPUServiceNAD metrics in KSM")
 	expectedMetricsNames := map[string][]string{
 		"dpuservicenad": {"created", "info", "status_conditions", "status_condition_last_transition_time"},
 	}
 
 	Eventually(func(g Gomega) {
-		actualMetricsNames := metrics.GetKSMMetrics(ctx, hostClusterRESTClient, metricsURI)
+		actualMetricsNames := metrics.GetKSMMetrics(g, ctx, hostClusterRESTClient, metricsURI)
 		g.Expect(actualMetricsNames).NotTo(BeEmpty(), "Actual metrics are empty")
 		g.Expect(metrics.VerifyMetrics(expectedMetricsNames, actualMetricsNames)).To(BeEmpty())
 	}).WithTimeout(5 * time.Second).Should(Succeed())
@@ -218,11 +218,11 @@ func VerifyDPUPodToPodRDMATraffic(ctx context.Context, input *systemTestInput) {
 	By("Creating the objects in the host cluster")
 	setupDPUPodToPodRDMATrafficTest(ctx, input)
 
-	By("Getting the pods in the dpu cluster")
+	By("Getting the pods in the DPU cluster")
 	pod1, pod2 := get2DPUServicePods(ctx, input.namespace, "dummydpuservice-rdma")
-	// Validate that IPs are available for both pods	getPodIPForInterface(pod1, "app_rdma_if")
-	podIP1 := getPodIPForInterface(pod1, "app_rdma_if")
-	podIP2 := getPodIPForInterface(pod2, "app_rdma_if")
+	// Validate that IPs are available for both pods
+	podIP1 := getPodIPForInterface(Default, pod1, "app_rdma_if")
+	podIP2 := getPodIPForInterface(Default, pod2, "app_rdma_if")
 	Expect(podIP1).ToNot(BeEmpty())
 	Expect(podIP2).ToNot(BeEmpty())
 
@@ -261,7 +261,7 @@ func setupDPUPodToPodRDMATrafficTest(ctx context.Context, input *systemTestInput
 	}
 	poolLabels := map[string]string{"svc.dpu.nvidia.com/pool": "dummydpuservice-rdma"}
 
-	By("Create and wait for dpu service interfaces")
+	By("Create and wait for DPU service interfaces")
 	createAndWaitForInterfaces(ctx, input.client, input.dpuServiceInterfaceTemplate, interfaceConfigs)
 
 	By("Create the chain between the workload pod and p0")
@@ -350,25 +350,24 @@ func createDummyDPUServiceForRDMA(ctx context.Context, testClient client.Client,
 
 // getPodIPForInterface extracts IP from the k8s.v1.cni.cncf.io/networks-status annotation for the given Pod for the
 // given interfaceName. It expects that only one IP is assigned to this interface and fails the test if not found.
-func getPodIPForInterface(pod corev1.Pod, interfaceName string) string {
+func getPodIPForInterface(g Gomega, pod corev1.Pod, interfaceName string) string {
 	networksStatusAnnotation, exists := pod.Annotations["k8s.v1.cni.cncf.io/networks-status"]
-	Expect(exists).To(BeTrue())
+	g.Expect(exists).To(BeTrue(), "network status annotation doesn't exist")
 
 	var networksStatus []map[string]any
-	err := json.Unmarshal([]byte(networksStatusAnnotation), &networksStatus)
-	Expect(err).NotTo(HaveOccurred())
+	g.Expect(json.Unmarshal([]byte(networksStatusAnnotation), &networksStatus)).To(Succeed(), "error while unmarshaling network status annotation")
 
 	var podIPs []string
 	for _, network := range networksStatus {
 		if iface, ok := network["interface"].(string); ok && iface == interfaceName {
 			if ips, ok := network["ips"].([]any); ok {
-				Expect(ips).To(HaveLen(1))
+				g.Expect(ips).To(HaveLen(1))
 				podIPs = append(podIPs, ips[0].(string))
 			}
 		}
 	}
 
-	Expect(podIPs).To(HaveLen(1))
+	g.Expect(podIPs).To(HaveLen(1))
 
 	return podIPs[0]
 }

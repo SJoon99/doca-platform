@@ -21,6 +21,8 @@ PROJECT_DIR := $(shell cd $(dir $(lastword $(MAKEFILE_LIST))) && pwd -L)
 # Example: $(dir ...) returns "/path/to/project/" but we want "/path/to/project"
 PROJECT_DIR := $(patsubst %/,%,$(PROJECT_DIR))
 
+GO_VERSION ?= $(shell awk '/^toolchain /{print $$2}' go.mod | awk -F 'go' '{print $$2}')
+
 ## Include Make modules which are split up in this repo for better structure.
 include hack/tools/tools.mk
 
@@ -59,8 +61,6 @@ else
 GOBIN=$(shell go env GOBIN)
 endif
 
-GO_VERSION ?= $(shell awk '/^toolchain /{print $$2}' go.mod | awk -F 'go' '{print $$2}')
-
 # Allows for defining additional Go test args, e.g. '-tags integration'.
 # The linkmode=internal flag is used to force using Go linker to do the linking.
 # This suppresses warnings like ".../00NNNN.o has malformed LC_DYSYMTAB".
@@ -71,9 +71,6 @@ GO_TEST_ARGS ?= -race -ldflags=-linkmode=internal
 # Options are set to exit when a recipe line exits non-zero or a piped command fails.
 SHELL = /usr/bin/env bash -o pipefail
 .SHELLFLAGS = -ec
-
-# Contains all image references we expect to push.
-ALL_CONTAINER_IMAGES ?= $(shell awk '/Image:/{print $$2}' < $(RELEASE_FILE))
 
 ##@ General
 
@@ -131,7 +128,7 @@ $(SOS_REPORT_DIR): | $(REPOSDIR)
 	curl -sL ${DOCA_SOSREPORT_REPO_URL} | tar -xz -C ${REPOSDIR}
 
 # nvidia-external-attacher dependencies to be able to build its docker image
-EXTERNAL_ATTACHER_BRANCH=release-4.9
+EXTERNAL_ATTACHER_BRANCH=release-4.11
 NVIDIA_EXTERNAL_ATTACHER_DIR=third_party/forked/nvidia-external-attacher
 
 # Image for the SR-IOV device plugin, deployed by the NodeSRIOVDevicePlugin controller in the host cluster
@@ -139,7 +136,7 @@ export NODE_SRIOV_DEVICE_PLUGIN_IMAGE=nvcr.io/nvidia/mellanox/sriov-network-devi
 export NODE_SRIOV_DEVICE_PLUGIN_TAG=network-operator-v25.10.0
 
 # VPC dependencies to be able to build/push images and charts
-VPC_REF=aceab78879b88a22362efb71aae47351f433a728
+VPC_REF=6952d0d082c349293b5c945f5c1a1b5c0634c66e
 VPC_DIR=$(REPOSDIR)/ovn-vpc/ovn-vpc-$(VPC_REF)
 # Token used for gitlab reporistory access, usually needed for CI/CD pipelines.
 # dev envs usually have those set in git credentials.
@@ -591,14 +588,20 @@ test-deploy-mock-dms: helm # Deploy mock-dms to the kind test cluster.
 
 HELMFILE_FILE ?= $(CURDIR)/deploy/helmfiles/prereqs.yaml
 HELMFILE_SELECTOR ?=
+HELMFILE_COLLECT_RESOURCES_ON_FAIL ?= true
+HELMFILE_CLEANUP_ON_FAIL ?= false
+HELMFILE_WAIT ?= true
 .PHONY: test-deploy-helmfile
-test-deploy-helmfile: helmfile helm helm-diff helm-git ## Deploy helm dependencies from local helmfile
-	@$(CURDIR)/hack/scripts/deploy-helmfile.sh \
+test-deploy-helmfile: helmfile helm helm-diff helm-git yq binary-dpfdev ## Deploy helm dependencies from local helmfile
+	@DPFDEV_BIN=$(LOCALBIN)/dpfdev $(CURDIR)/hack/scripts/deploy-helmfile.sh \
 		--file "$(HELMFILE_FILE)" \
+		--wait "$(HELMFILE_WAIT)" \
+		--cleanup-on-fail "$(HELMFILE_CLEANUP_ON_FAIL)" \
+		--collect-resources-on-fail "$(HELMFILE_COLLECT_RESOURCES_ON_FAIL)" \
+		--helm-bin "$(HELM)" \
 		--helmfile-bin "$(HELMFILE)" \
 		$(if $(strip $(HELMFILE_ENV)),--environment "$(HELMFILE_ENV)") \
-		$(if $(strip $(HELMFILE_SELECTOR)),--selector "$(HELMFILE_SELECTOR)") \
-		--helm-bin "$(HELM)"
+		$(if $(strip $(HELMFILE_SELECTOR)),--selector "$(HELMFILE_SELECTOR)")
 
 ARTIFACTS_DIR ?= $(CURDIR)/artifacts
 $(ARTIFACTS_DIR):
@@ -723,6 +726,8 @@ verify-manifest-dpu-networking-sriov-device-plugin: helm-package-dpu-networking 
 verify-manifest-dpu-networking-nvidia-k8s-ipam: helm-package-dpu-networking helm $(ARTIFACTS_RENDERED_MANIFESTS_DIR) binary-dpfdev ## Run manifest verification for the dpu-networking nvidia-k8s-ipam subchart
 	$Q $(HELM) template $(CHARTSDIR)/$(DPU_NETWORKING_HELM_CHART_NAME)-$(DPU_NETWORKING_HELM_CHART_VER).tgz \
 	  --set nvidia-k8s-ipam.enabled=true \
+	  --set nvidia-k8s-ipam.deployDPUManifests=true \
+	  --set nvidia-k8s-ipam.deployHostManifests=true \
 	  --set nvidia-k8s-ipam.nvIpam.controller.resources.limits.cpu=1m \
 	> $(ARTIFACTS_RENDERED_MANIFESTS_DIR)/dpu-networking-nvidia-k8s-ipam-$(TAG).yaml
 	$Q RENDERED_MANIFEST="$(ARTIFACTS_RENDERED_MANIFESTS_DIR)/dpu-networking-nvidia-k8s-ipam-$(TAG).yaml" \
@@ -888,6 +893,8 @@ verify-manifest-operator-embedded-%: helm $(ARTIFACTS_RENDERED_MANIFESTS_DIR) bi
 verify-manifest-storage-host-snap-csi-plugin: helm $(ARTIFACTS_RENDERED_MANIFESTS_DIR) binary-dpfdev ## Run manifest verification for the storage chart's host snap-csi-plugin component
 	$Q $(HELM) template dpuservices/storage/chart \
 	  --set host.snapCsiPlugin.enabled=true \
+	  --set host.snapCsiPlugin.node.enabled=true \
+	  --set host.snapCsiPlugin.controller.enabled=true \
 	  --set host.snapCsiPlugin.controller.plugin.resources.limits.cpu=1m \
 	  --set host.snapCsiPlugin.controller.plugin.resources.limits.memory=1Mi \
 	  --set host.snapCsiPlugin.controller.externalProvisioner.resources.limits.cpu=1m \
@@ -990,11 +997,6 @@ verify-manifest-storage-dpu-doca-snap: helm $(ARTIFACTS_RENDERED_MANIFESTS_DIR) 
 	$Q RENDERED_MANIFEST="$(ARTIFACTS_RENDERED_MANIFESTS_DIR)/storage-dpu-doca-snap-$(TAG).yaml" \
 	  MANIFEST_NAME="storage-dpu-doca-snap" \
 	  hack/scripts/validate-manifest-checkov.sh
-
-.PHONY: verify-container-images
-verify-container-images: generate-manifests-release-defaults $(TRIVY) ## Verify container images
-	$Q TRIVY=$(TRIVY) hack/scripts/verify-container-images.sh \
-	 $(ALL_CONTAINER_IMAGES)
 
 .PHONY: lint-helm
 lint-helm: lint-helm-dpu-networking lint-helm-dummydpuservice lint-helm-storage
@@ -1136,6 +1138,8 @@ BASE_IMAGE = nvcr.io/nvidia/doca/dpf_containers:1.0.2-ubuntu22.04-distroless
 ALPINE_IMAGE = alpine:3.19
 # Base image for hostdriver (DOCA full runtime host image)
 HOSTDRIVER_BASE_IMAGE ?= nvcr.io/nvidia/doca/doca:3.2.1-full-rt-ubuntu24.04-host
+# Base image for storage-host, by default it is the same as the hostdriver base image
+STORAGE_HOST_BASE_IMAGE ?= $(HOSTDRIVER_BASE_IMAGE)
 
 .PHONY: binaries
 binaries: $(addprefix binary-,$(BUILD_TARGETS)) ## Build all binaries
@@ -1196,26 +1200,24 @@ DPUAGENT_PKG_VERSION = $(subst v,,$(TAG))
 DPUAGENT_DEB = $(LOCALBIN)/dpu-agent_$(DPUAGENT_PKG_VERSION)_arm64.deb
 DPUAGENT_RPM = $(LOCALBIN)/dpu-agent-$(DPUAGENT_PKG_VERSION)-1.aarch64.rpm
 
+# Individual packaging targets - package existing binary without building
 .PHONY: deb-dpuagent
-deb-dpuagent: binary-dpuagent $(NFPM) ## Build dpu-agent .deb package.
+deb-dpuagent: $(NFPM) ## Package dpuagent binary as .deb (expects binary to exist).
 	$(Q) cp $(DPUAGENT_BINARY) $(DPUAGENT_PKG_DIR)/dpuagent
 	$(Q) cd $(DPUAGENT_PKG_DIR) && \
 		VERSION=$(DPUAGENT_PKG_VERSION) \
 		$(NFPM) package --packager deb --target $(DPUAGENT_DEB)
 	$(Q) rm -f $(DPUAGENT_PKG_DIR)/dpuagent
-	@echo "Built $(DPUAGENT_DEB)"
+	@echo "Packaged $(DPUAGENT_DEB)"
 
 .PHONY: rpm-dpuagent
-rpm-dpuagent: binary-dpuagent $(NFPM) ## Build dpu-agent .rpm package.
+rpm-dpuagent: $(NFPM) ## Package dpuagent binary as .rpm (expects binary to exist).
 	$(Q) cp $(DPUAGENT_BINARY) $(DPUAGENT_PKG_DIR)/dpuagent
 	$(Q) cd $(DPUAGENT_PKG_DIR) && \
 		VERSION=$(DPUAGENT_PKG_VERSION) \
 		$(NFPM) package --packager rpm --target $(DPUAGENT_RPM)
 	$(Q) rm -f $(DPUAGENT_PKG_DIR)/dpuagent
-	@echo "Built $(DPUAGENT_RPM)"
-
-.PHONY: packages-dpuagent
-packages-dpuagent: deb-dpuagent rpm-dpuagent ## Build dpu-agent .deb and .rpm packages.
+	@echo "Packaged $(DPUAGENT_RPM)"
 
 .PHONY: binary-storage-snap-host-controller
 binary-storage-snap-host-controller: ## Build the snap host controller controller binary.
@@ -1249,7 +1251,7 @@ binary-storage-nvidia-external-attacher: generate-client-for-storage-nvidia-exte
 
 	# Build nvidia-external-attacher binary
 	cd $(NVIDIA_EXTERNAL_ATTACHER_DIR)/external-attacher && \
-	CGO_ENABLED=0 GOOS=$(OS) GOARCH=$(ARCH) go build -buildvcs=false -ldflags="$(GO_LDFLAGS)" -gcflags="$(GO_GCFLAGS)" -trimpath -o $(LOCALBIN)/nvidia-external-attacher github.com/kubernetes-csi/external-attacher/cmd/csi-attacher
+	CGO_ENABLED=0 GOOS=$(OS) GOARCH=$(ARCH) go build -buildvcs=false -ldflags="$(GO_LDFLAGS)" -gcflags="$(GO_GCFLAGS)" -trimpath -o $(LOCALBIN)/nvidia-external-attacher github.com/kubernetes-csi/external-attacher/v4/cmd/csi-attacher
 
 .PHONY: binary-dpfctl
 binary-dpfctl: ## Build the dpfctl binary.
@@ -1460,7 +1462,7 @@ docker-build-ovs-cni: docker-buildx-setup $(OVS_CNI_DIR) $(ARTIFACTS_DIR) ## Bui
 .PHONY: docker-build-hostdriver # Build a multi-arch image for hostdriver. The variable DPF_SYSTEM_ARCH defines which architectures this target builds for.
 docker-build-hostdriver: $(addprefix docker-build-hostdriver-for-,$(DPF_SYSTEM_ARCH))
 
-docker-build-hostdriver-for-%: docker-buildx-setup $(ARTIFACTS_DIR) packages-dpuagent
+docker-build-hostdriver-for-%: docker-buildx-setup $(ARTIFACTS_DIR)
 	# Provenance false ensures this target builds an image rather than a manifest when using buildx.
 	$(CURDIR)/hack/scripts/docker-build.sh \
 		--pull \
@@ -1479,9 +1481,7 @@ docker-build-hostdriver-for-%: docker-buildx-setup $(ARTIFACTS_DIR) packages-dpu
 		--build-arg gcflags="$(GO_GCFLAGS)" \
 		--build-arg ubuntu_mirror=$(UBUNTU_MIRROR) \
 		--build-arg PACKAGE_SOURCES=$(PACKAGE_SOURCES) \
-		--build-arg DPUAGENT_DEB=$(notdir $(DPUAGENT_DEB)) \
-		--build-arg DPUAGENT_RPM=$(notdir $(DPUAGENT_RPM)) \
-		--build-context packages=$(LOCALBIN) \
+		--build-arg TAG=$(TAG) \
 		-t $(HOSTDRIVER_IMAGE):$(TAG)-$* \
 		-f Dockerfile.hostdriver \
 		.
@@ -1601,6 +1601,7 @@ docker-build-storage-host-for-%: docker-buildx-setup $(ARTIFACTS_DIR)
 		--platform=linux/$* \
 		--progress=plain \
 		--build-arg builder_image=$(BUILD_IMAGE) \
+		--build-arg storage_host_base_image=$(STORAGE_HOST_BASE_IMAGE) \
 		--build-arg ldflags="$(GO_LDFLAGS)" \
 		--build-arg gcflags="$(GO_GCFLAGS)" \
 		--build-arg TAG=$(TAG) \
@@ -1664,7 +1665,7 @@ docker-create-manifest-for-keepalived:
 .PHONY: docker-build-bfb-registry # Build a multi-arch image for BFB Registry. The variable DPF_SYSTEM_ARCH defines which architectures this target builds for.
 docker-build-bfb-registry: $(addprefix docker-build-bfb-registry-for-,$(DPF_SYSTEM_ARCH))
 
-docker-build-bfb-registry-for-%: docker-buildx-setup $(ARTIFACTS_DIR) packages-dpuagent
+docker-build-bfb-registry-for-%: docker-buildx-setup $(ARTIFACTS_DIR)
 	# Provenance false ensures this target builds an image rather than a manifest when using buildx.
 	$(CURDIR)/hack/scripts/docker-build.sh \
 		--load \
@@ -1675,9 +1676,7 @@ docker-build-bfb-registry-for-%: docker-buildx-setup $(ARTIFACTS_DIR) packages-d
 		--label=org.opencontainers.image.source=$(PROJECT_REPO) \
 		--build-arg ubuntu_mirror=$(UBUNTU_MIRROR) \
 		--build-arg PACKAGE_SOURCES=$(PACKAGE_SOURCES) \
-		--build-arg DPUAGENT_DEB=$(notdir $(DPUAGENT_DEB)) \
-		--build-arg DPUAGENT_RPM=$(notdir $(DPUAGENT_RPM)) \
-		--build-context packages=$(LOCALBIN) \
+		--build-arg builder_image=$(BUILD_IMAGE) \
 		--provenance=false \
 		--platform=linux/$* \
 		--progress=plain \

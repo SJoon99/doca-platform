@@ -336,20 +336,17 @@ func reconcileCurrentDPUServiceRevision(ctx context.Context, c client.Client,
 		return isDisruptiveUpgradeOngoing
 	}
 
-	// if the current revision is still not ready, keep the eventual old revisions and requeue
-	// otherwise, clean old revisions
+	// If we have old revisions, it means that we are still under upgrade and we need to handle those old revisions
+	// before we can mark the upgrade as done.
+	isDisruptiveUpgradeOngoing = true
+
+	// If the current revision is still not ready, keep the old revisions and requeue otherwise, clean old revisions.
+	// We expect additional reconciliations to be triggered for leftovers that are getting deleted.
 	if conditions.IsTrue(currentRev, conditions.TypeReady) && len(getNotReadyDPUSets(existingDPUSets)) == 0 {
 		err := cleanStaleDPUServices(ctx, c, oldRevs)
 		if err != nil {
 			log.Error(err, "failed to delete stale DPUServices")
 		}
-		// If we reached that stage, it means that we have completed the upgrade and now we just need to clean any
-		// leftovers. We expect additional reconcilliations to be triggered for leftovers that are getting deleted.
-		isDisruptiveUpgradeOngoing = false
-	} else {
-		// If we found old revisions and either the DPUService or the DPUSets are not ready, it means that an upgrade
-		// is still ongoing
-		isDisruptiveUpgradeOngoing = true
 	}
 
 	for _, svc := range oldRevs {
@@ -473,7 +470,8 @@ func generateDPUService(dpuDeploymentNamespacedName types.NamespacedName,
 				dpuServiceVersionAnnotationKey: versionDigest,
 			},
 			Labels: map[string]string{
-				dpuservicev1.ParentDPUDeploymentNameLabel: getParentDPUDeploymentLabelValue(dpuDeploymentNamespacedName),
+				dpuservicev1.ParentDPUDeploymentNameLabel:            getParentDPUDeploymentLabelValue(dpuDeploymentNamespacedName),
+				dpuservicev1.ServiceReferenceInDPUDeploymentLabelKey: name,
 			},
 		},
 		Spec: dpuservicev1.DPUServiceSpec{
@@ -487,7 +485,7 @@ func generateDPUService(dpuDeploymentNamespacedName types.NamespacedName,
 		},
 	}
 
-	dpuService.Spec.ServiceDaemonSet = generateDPUServiceDaemonSetValues(serviceConfig.Spec.ServiceConfiguration.ServiceDaemonSet)
+	dpuService.Spec.ServiceDaemonSet = generateDPUServiceDaemonSetValues(name, serviceConfig.Spec.ServiceConfiguration.ServiceDaemonSet)
 
 	if serviceConfig.Spec.ServiceConfiguration.ConfigPorts != nil {
 		dpuService.Spec.ConfigPorts = serviceConfig.Spec.ServiceConfiguration.ConfigPorts
@@ -502,15 +500,16 @@ func generateDPUService(dpuDeploymentNamespacedName types.NamespacedName,
 	return dpuService, nil
 }
 
-func generateDPUServiceDaemonSetValues(serviceDaemonSet dpuservicev1.DPUServiceConfigurationServiceDaemonSetValues) *dpuservicev1.ServiceDaemonSetValues {
-	var serviceDaemonSetValues *dpuservicev1.ServiceDaemonSetValues
-	if serviceDaemonSet.Labels != nil || serviceDaemonSet.Annotations != nil || serviceDaemonSet.UpdateStrategy != nil || serviceDaemonSet.Resources != nil {
-		serviceDaemonSetValues = &dpuservicev1.ServiceDaemonSetValues{
-			Labels:         serviceDaemonSet.Labels,
-			Annotations:    serviceDaemonSet.Annotations,
-			UpdateStrategy: serviceDaemonSet.UpdateStrategy,
-			Resources:      serviceDaemonSet.Resources,
-		}
+func generateDPUServiceDaemonSetValues(name string, serviceDaemonSet dpuservicev1.DPUServiceConfigurationServiceDaemonSetValues) *dpuservicev1.ServiceDaemonSetValues {
+	labels := map[string]string{
+		dpuservicev1.ServiceReferenceInDPUDeploymentLabelKey: name,
+	}
+	maps.Copy(labels, serviceDaemonSet.Labels)
+	serviceDaemonSetValues := &dpuservicev1.ServiceDaemonSetValues{
+		Labels:         labels,
+		Annotations:    serviceDaemonSet.Annotations,
+		UpdateStrategy: serviceDaemonSet.UpdateStrategy,
+		Resources:      serviceDaemonSet.Resources,
 	}
 	return serviceDaemonSetValues
 }

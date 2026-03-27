@@ -303,20 +303,17 @@ func reconcileCurrentDPUServiceInterfaceRevision(ctx context.Context,
 		return isDisruptiveUpgradeOngoing
 	}
 
-	// if the current revision is ready, clean old revisions. If not, the stale entries won't be removed in the caller
-	// function unless they have their DPUService deleted.
+	// If we have old revisions, it means that we are still under upgrade and we need to handle those old revisions
+	// before we can mark the upgrade as done.
+	isDisruptiveUpgradeOngoing = true
+
+	// If the current revision is still not ready, keep the old revisions and requeue otherwise, clean old revisions.
+	// We expect additional reconciliations to be triggered for leftovers that are getting deleted.
 	if conditions.IsTrue(currentDPUService, conditions.TypeReady) && len(getNotReadyDPUSets(existingDPUSets)) == 0 {
 		err := cleanStaleDPUServiceInterfaces(ctx, c, oldRevs)
 		if err != nil {
 			log.Error(err, "failed to clean stale DPUServiceInterfaces")
 		}
-		// If we reached that stage, it means that we have completed the upgrade and now we just need to clean any
-		// leftovers. We expect additional reconcilliations to be triggered for leftovers that are getting deleted.
-		isDisruptiveUpgradeOngoing = false
-	} else {
-		// If we found old revisions and either the DPUServiceChain or the DPUSets are not ready, it means that an
-		// upgrade is still ongoing
-		isDisruptiveUpgradeOngoing = true
 	}
 
 	return isDisruptiveUpgradeOngoing
@@ -343,7 +340,7 @@ func getCurrentAndStaleDPUServiceInterfaces(serviceInterfaceName string, service
 func generateDPUServiceInterface(name string,
 	dpuDeploymentNamespacedName types.NamespacedName,
 	owners []metav1.OwnerReference,
-	dpuServiceName string,
+	serviceName string,
 	serviceInterface dpuservicev1.ServiceInterfaceTemplate,
 	dpuServiceVersionDigest string,
 	dpuClusterSelector *metav1.LabelSelector,
@@ -358,7 +355,8 @@ func generateDPUServiceInterface(name string,
 				dpuServiceVersionAnnotationKey: dpuServiceVersionDigest,
 			},
 			Labels: map[string]string{
-				dpuservicev1.ParentDPUDeploymentNameLabel: getParentDPUDeploymentLabelValue(dpuDeploymentNamespacedName),
+				dpuservicev1.ParentDPUDeploymentNameLabel:            getParentDPUDeploymentLabelValue(dpuDeploymentNamespacedName),
+				dpuservicev1.ServiceReferenceInDPUDeploymentLabelKey: serviceName,
 			},
 		},
 		Spec: dpuservicev1.DPUServiceInterfaceSpec{
@@ -368,14 +366,14 @@ func generateDPUServiceInterface(name string,
 					Template: dpuservicev1.ServiceInterfaceSpecTemplate{
 						ObjectMeta: dpuservicev1.ObjectMeta{
 							Labels: map[string]string{
-								dpuservicev1.DPFServiceIDLabelKey:  getServiceID(dpuDeploymentNamespacedName, dpuServiceName),
+								dpuservicev1.DPFServiceIDLabelKey:  getServiceID(dpuDeploymentNamespacedName, serviceName),
 								ServiceInterfaceInterfaceNameLabel: serviceInterface.Name,
 							},
 						},
 						Spec: dpuservicev1.ServiceInterfaceSpec{
 							InterfaceType: dpuservicev1.InterfaceTypeService,
 							Service: &dpuservicev1.ServiceDef{
-								ServiceID:      getServiceID(dpuDeploymentNamespacedName, dpuServiceName),
+								ServiceID:      getServiceID(dpuDeploymentNamespacedName, serviceName),
 								Network:        serviceInterface.Network,
 								InterfaceName:  serviceInterface.Name,
 								VirtualNetwork: serviceInterface.VirtualNetwork,
@@ -433,12 +431,12 @@ func constructDPUServiceInterfaceNames(ctx context.Context,
 
 	interfaceNameByServiceName := make(map[string]interfaceNameToDPUServiceInterfaceName)
 	// Create or update DPUServices to match what is defined in the DPUDeployment.
-	for dpuServiceName := range dpuDeployment.Spec.Services {
-		serviceConfig := dependencies.DPUServiceConfigurations[dpuServiceName]
-		serviceTemplate := dependencies.DPUServiceTemplates[dpuServiceName]
+	for serviceName := range dpuDeployment.Spec.Services {
+		serviceConfig := dependencies.DPUServiceConfigurations[serviceName]
+		serviceTemplate := dependencies.DPUServiceTemplates[serviceName]
 		versionDigest := calculateDPUServiceVersionDigest(serviceConfig, serviceTemplate)
-		interfaceNameByServiceName[dpuServiceName] = constructCurrentDPUServiceInterfaceNamesForService(dpuDeployment,
-			dpuServiceName,
+		interfaceNameByServiceName[serviceName] = constructCurrentDPUServiceInterfaceNamesForService(dpuDeployment,
+			serviceName,
 			dependencies,
 			versionDigest,
 			existingDPUServiceInterfaces)
@@ -453,12 +451,12 @@ func constructDPUServiceInterfaceNames(ctx context.Context,
 // * use existing resource if non disruptive upgrade, if not exists, create
 // * use new resource if disruptive upgrade
 func constructCurrentDPUServiceInterfaceNamesForService(dpuDeployment *dpuservicev1.DPUDeployment,
-	dpuServiceName string,
+	serviceName string,
 	dependencies *dpuDeploymentDependencies,
 	dpuServiceVersionDigest string,
 	existingDPUServiceInterfaces *dpuservicev1.DPUServiceInterfaceList) interfaceNameToDPUServiceInterfaceName {
 
-	serviceConfig := dependencies.DPUServiceConfigurations[dpuServiceName]
+	serviceConfig := dependencies.DPUServiceConfigurations[serviceName]
 	interfacesFromDependencies := serviceConfig.Spec.Interfaces
 
 	if len(interfacesFromDependencies) == 0 {
@@ -467,9 +465,9 @@ func constructCurrentDPUServiceInterfaceNamesForService(dpuDeployment *dpuservic
 
 	m := make(map[string]string)
 	for _, serviceInterface := range interfacesFromDependencies {
-		generatedServiceInterfaceName := fmt.Sprintf("%s-%s-%s", dpuServiceName, strings.ReplaceAll(serviceInterface.Name, "_", "-"), utilrand.String(resourceNameGeneratedSuffixLength))
+		generatedServiceInterfaceName := fmt.Sprintf("%s-%s-%s", serviceName, strings.ReplaceAll(serviceInterface.Name, "_", "-"), utilrand.String(resourceNameGeneratedSuffixLength))
 		// filter the existing DPUServiceInterfaces by name and extract the most current one, if any
-		currentRevision, oldRevisions := getCurrentAndStaleDPUServiceInterfaces(serviceInterface.Name, dpuServiceName, dpuServiceVersionDigest, existingDPUServiceInterfaces)
+		currentRevision, oldRevisions := getCurrentAndStaleDPUServiceInterfaces(serviceInterface.Name, serviceName, dpuServiceVersionDigest, existingDPUServiceInterfaces)
 		switch {
 		case currentRevision != nil:
 			// found current, we use its name

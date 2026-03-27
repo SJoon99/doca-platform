@@ -17,14 +17,18 @@ limitations under the License.
 package bfcfg
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
 	"strings"
+	"text/template"
 
 	provisioningv1 "github.com/nvidia/doca-platform/api/provisioning/v1alpha1"
+	"github.com/nvidia/doca-platform/internal/provisioning/controllers/dpu/cloudinit"
 	cutil "github.com/nvidia/doca-platform/internal/provisioning/controllers/util"
 
+	sprig "github.com/Masterminds/sprig/v3"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
@@ -144,7 +148,7 @@ var (
 			It("error if custom bf.cfg template is invalid", func() {
 				for _, redfish := range redfishModes {
 					flavor := &provisioningv1.DPUFlavor{}
-					_, err := Generate(flavor, GenerateOptions{DPUHostName: "name", KubeadmSecretName: "test-secret", KubeadmSecretNamespace: "default", IsRedfish: redfish, ControlPlaneMTU: 1500}, []byte("{{.Invalid"))
+					_, err := Generate(flavor, cloudinit.Params{DPUHostName: "name", KubeadmSecretName: "test-secret", KubeadmSecretNamespace: "default", IsRedfish: redfish, ControlPlaneMTU: 1500}, []byte("{{.Invalid"))
 					Expect(err).To(HaveOccurred())
 				}
 			})
@@ -153,7 +157,7 @@ var (
 					flavor := &provisioningv1.DPUFlavor{}
 					templateData, err := os.ReadFile(filepath.Join(dir, fileName))
 					Expect(err).NotTo(HaveOccurred())
-					got, err := Generate(flavor, GenerateOptions{DPUHostName: "name", KubeadmSecretName: "test-secret", KubeadmSecretNamespace: "default", IsRedfish: redfish, ControlPlaneMTU: 1500}, templateData)
+					got, err := Generate(flavor, cloudinit.Params{DPUHostName: "name", KubeadmSecretName: "test-secret", KubeadmSecretNamespace: "default", IsRedfish: redfish, ControlPlaneMTU: 1500}, templateData)
 					Expect(err).NotTo(HaveOccurred())
 					Expect(got).To(Equal([]byte("test-secret")))
 				}
@@ -184,8 +188,8 @@ var (
 				return nil
 			}
 
-			generateAndParse := func(opts GenerateOptions) ([]byte, *CloudConfig) {
-				got, err := Generate(flavor, opts, DefaultBFCFGTemplateData)
+			generateAndParse := func(opts cloudinit.Params) ([]byte, *CloudConfig) {
+				got, err := generateDefault(flavor, opts)
 				Expect(err).NotTo(HaveOccurred())
 				parsed := &CloudConfig{}
 				Expect(yaml.Unmarshal(extractYAML(got), parsed)).To(Succeed())
@@ -201,7 +205,7 @@ var (
 			})
 
 			It("should produce valid YAML with all branches enabled (indentation validation)", func() {
-				_, parsed := generateAndParse(GenerateOptions{
+				_, parsed := generateAndParse(cloudinit.Params{
 					DPUHostName:            "test-dpu",
 					KubeadmSecretName:      "test-secret",
 					KubeadmSecretNamespace: "default",
@@ -274,7 +278,7 @@ ovs-vsctl add-br br-test
 			})
 
 			It("redfish mode: BMC functions, OOB network, kubeconfig", func() {
-				raw, parsed := generateAndParse(GenerateOptions{
+				raw, parsed := generateAndParse(cloudinit.Params{
 					DPUHostName:            "test-dpu",
 					KubeadmSecretName:      "test-secret",
 					KubeadmSecretNamespace: "default",
@@ -318,8 +322,65 @@ network:
 				Expect(kubeconfigFile.Content).To(Equal(sampleKubeconfig))
 			})
 
+			It("bf.cfg template output format", func() {
+				tmpl, err := template.New("").Funcs(sprig.FuncMap()).Parse(string(DefaultBFCFGTemplateData))
+				Expect(err).NotTo(HaveOccurred())
+
+				files := []cloudinit.File{
+					{Path: "/mnt/etc/file1", Content: "content1\n"},
+					{Path: "/mnt/etc/file2", Content: "line1\nline2\n"},
+					{Path: "/mnt/etc/file3", Content: "no-trailing-newline"},
+				}
+
+				var buf bytes.Buffer
+				Expect(tmpl.Execute(&buf, &defaultBFCFGData{
+					BFGCFGParams:     []string{"PARAM1=yes", "PARAM2=no"},
+					RedfishInterface: true,
+					CloudInitFiles:   files,
+				})).To(Succeed())
+				Expect(buf.String()).To(Equal(skipFirstEmptyLine(`
+PARAM1=yes
+PARAM2=no
+
+BMC_PASSWORD="$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 4)-$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 4)_$(tr -dc '0-9' </dev/urandom | head -c 2)$(tr -dc 'a-z' </dev/urandom | head -c 1)$(tr -dc 'A-Z' </dev/urandom | head -c 1)"
+BMC_USER="fw_updater"
+BMC_REBOOT="yes"
+CEC_REBOOT="yes"
+USER_ID=8
+
+pre_bmc_components_update() {
+    ipmitool user set name $USER_ID $BMC_USER
+    ipmitool user set password $USER_ID $BMC_PASSWORD
+    ipmitool user enable $USER_ID
+    ipmitool channel setaccess 1 $USER_ID ipmi=on
+    ipmitool user priv $USER_ID 0x4 1
+}
+
+post_bmc_components_update() {
+    ipmitool user set name $USER_ID ""
+}
+
+
+bfb_modify_os()
+{
+cat << \EOF > /mnt/etc/file1
+content1
+EOF
+
+cat << \EOF > /mnt/etc/file2
+line1
+line2
+EOF
+
+cat << \EOF > /mnt/etc/file3
+no-trailing-newline
+EOF
+}
+`)))
+			})
+
 			It("gNOI mode: no BMC, tmfifo network, no kubeconfig", func() {
-				raw, parsed := generateAndParse(GenerateOptions{
+				raw, parsed := generateAndParse(cloudinit.Params{
 					DPUHostName:            "test-dpu",
 					KubeadmSecretName:      "test-secret",
 					KubeadmSecretNamespace: "default",
@@ -373,14 +434,18 @@ network:
 )
 
 var _ = Describe("getTemplateDataFromConfigMap", func() {
+	const testProvisioningNamespace = "dpf-provisioning"
+
 	var (
-		ctx              context.Context
-		scheme           *runtime.Scheme
-		namespace        string
-		bfbName          string
-		bfbNamespace     string
-		clusterName      string
-		clusterNamespace string
+		ctx                context.Context
+		scheme             *runtime.Scheme
+		namespace          string
+		bfbName            string
+		bfbNamespace       string
+		clusterName        string
+		clusterNamespace   string
+		dpuFlavorName      string
+		dpuFlavorNamespace string
 	)
 
 	BeforeEach(func() {
@@ -389,9 +454,11 @@ var _ = Describe("getTemplateDataFromConfigMap", func() {
 		Expect(corev1.AddToScheme(scheme)).To(Succeed())
 		namespace = "dpf-system"
 		bfbName = "my-bfb"
-		bfbNamespace = "dpf-provisioning"
+		bfbNamespace = testProvisioningNamespace
 		clusterName = "my-cluster"
-		clusterNamespace = "dpf-provisioning"
+		clusterNamespace = testProvisioningNamespace
+		dpuFlavorName = "my-flavor"
+		dpuFlavorNamespace = testProvisioningNamespace
 	})
 
 	makeConfigMap := func(name string, templateData string) *corev1.ConfigMap {
@@ -403,10 +470,12 @@ var _ = Describe("getTemplateDataFromConfigMap", func() {
 					cutil.BFCFGTemplateLabel: "true",
 				},
 				Annotations: map[string]string{
-					cutil.BFCFGTemplateBFBNameAnnotation:          bfbName,
-					cutil.BFCFGTemplateBFBNamespaceAnnotation:     bfbNamespace,
-					cutil.BFCFGTemplateClusterNameAnnotation:      clusterName,
-					cutil.BFCFGTemplateClusterNamespaceAnnotation: clusterNamespace,
+					cutil.BFCFGTemplateBFBNameAnnotation:            bfbName,
+					cutil.BFCFGTemplateBFBNamespaceAnnotation:       bfbNamespace,
+					cutil.BFCFGTemplateClusterNameAnnotation:        clusterName,
+					cutil.BFCFGTemplateClusterNamespaceAnnotation:   clusterNamespace,
+					cutil.BFCFGTemplateDPUFlavorNameAnnotation:      dpuFlavorName,
+					cutil.BFCFGTemplateDPUFlavorNamespaceAnnotation: dpuFlavorNamespace,
 				},
 			},
 			Data: map[string]string{
@@ -417,7 +486,7 @@ var _ = Describe("getTemplateDataFromConfigMap", func() {
 
 	It("should return nil when no matching ConfigMaps exist", func() {
 		c := fake.NewClientBuilder().WithScheme(scheme).Build()
-		_, err := getTemplateDataFromConfigMap(ctx, c, namespace, bfbName, bfbNamespace, clusterName, clusterNamespace)
+		_, err := getTemplateDataFromConfigMap(ctx, c, namespace, bfbName, bfbNamespace, clusterName, clusterNamespace, dpuFlavorName, dpuFlavorNamespace)
 		Expect(err).To(HaveOccurred())
 	})
 
@@ -425,7 +494,7 @@ var _ = Describe("getTemplateDataFromConfigMap", func() {
 		cm := makeConfigMap("bfcfg-template-1", "hostname={{.DPUHostName}}")
 		c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cm).Build()
 
-		data, err := getTemplateDataFromConfigMap(ctx, c, namespace, bfbName, bfbNamespace, clusterName, clusterNamespace)
+		data, err := getTemplateDataFromConfigMap(ctx, c, namespace, bfbName, bfbNamespace, clusterName, clusterNamespace, dpuFlavorName, dpuFlavorNamespace)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(data).NotTo(BeNil())
 		Expect(string(data)).To(Equal("hostname={{.DPUHostName}}"))
@@ -436,7 +505,7 @@ var _ = Describe("getTemplateDataFromConfigMap", func() {
 		cm2 := makeConfigMap("bfcfg-template-2", "template2")
 		c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cm1, cm2).Build()
 
-		data, err := getTemplateDataFromConfigMap(ctx, c, namespace, bfbName, bfbNamespace, clusterName, clusterNamespace)
+		data, err := getTemplateDataFromConfigMap(ctx, c, namespace, bfbName, bfbNamespace, clusterName, clusterNamespace, dpuFlavorName, dpuFlavorNamespace)
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("found 2 bf.cfg template ConfigMaps"))
 		Expect(data).To(BeNil())
@@ -451,10 +520,12 @@ var _ = Describe("getTemplateDataFromConfigMap", func() {
 					cutil.BFCFGTemplateLabel: "true",
 				},
 				Annotations: map[string]string{
-					cutil.BFCFGTemplateBFBNameAnnotation:          bfbName,
-					cutil.BFCFGTemplateBFBNamespaceAnnotation:     bfbNamespace,
-					cutil.BFCFGTemplateClusterNameAnnotation:      clusterName,
-					cutil.BFCFGTemplateClusterNamespaceAnnotation: clusterNamespace,
+					cutil.BFCFGTemplateBFBNameAnnotation:            bfbName,
+					cutil.BFCFGTemplateBFBNamespaceAnnotation:       bfbNamespace,
+					cutil.BFCFGTemplateClusterNameAnnotation:        clusterName,
+					cutil.BFCFGTemplateClusterNamespaceAnnotation:   clusterNamespace,
+					cutil.BFCFGTemplateDPUFlavorNameAnnotation:      dpuFlavorName,
+					cutil.BFCFGTemplateDPUFlavorNamespaceAnnotation: dpuFlavorNamespace,
 				},
 			},
 			Data: map[string]string{
@@ -463,14 +534,14 @@ var _ = Describe("getTemplateDataFromConfigMap", func() {
 		}
 		c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cm).Build()
 
-		data, err := getTemplateDataFromConfigMap(ctx, c, namespace, bfbName, bfbNamespace, clusterName, clusterNamespace)
+		data, err := getTemplateDataFromConfigMap(ctx, c, namespace, bfbName, bfbNamespace, clusterName, clusterNamespace, dpuFlavorName, dpuFlavorNamespace)
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("missing required key"))
 		Expect(err.Error()).To(ContainSubstring(ConfigMapDataKey))
 		Expect(data).To(BeNil())
 	})
 
-	It("should not match ConfigMaps with different annotations", func() {
+	It("should not match ConfigMaps with different BFB annotations", func() {
 		cm := &corev1.ConfigMap{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "bfcfg-template-different",
@@ -479,10 +550,12 @@ var _ = Describe("getTemplateDataFromConfigMap", func() {
 					cutil.BFCFGTemplateLabel: "true",
 				},
 				Annotations: map[string]string{
-					cutil.BFCFGTemplateBFBNameAnnotation:          "different-bfb",
-					cutil.BFCFGTemplateBFBNamespaceAnnotation:     bfbNamespace,
-					cutil.BFCFGTemplateClusterNameAnnotation:      clusterName,
-					cutil.BFCFGTemplateClusterNamespaceAnnotation: clusterNamespace,
+					cutil.BFCFGTemplateBFBNameAnnotation:            "different-bfb",
+					cutil.BFCFGTemplateBFBNamespaceAnnotation:       bfbNamespace,
+					cutil.BFCFGTemplateClusterNameAnnotation:        clusterName,
+					cutil.BFCFGTemplateClusterNamespaceAnnotation:   clusterNamespace,
+					cutil.BFCFGTemplateDPUFlavorNameAnnotation:      dpuFlavorName,
+					cutil.BFCFGTemplateDPUFlavorNamespaceAnnotation: dpuFlavorNamespace,
 				},
 			},
 			Data: map[string]string{
@@ -491,7 +564,34 @@ var _ = Describe("getTemplateDataFromConfigMap", func() {
 		}
 		c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cm).Build()
 
-		_, err := getTemplateDataFromConfigMap(ctx, c, namespace, bfbName, bfbNamespace, clusterName, clusterNamespace)
+		_, err := getTemplateDataFromConfigMap(ctx, c, namespace, bfbName, bfbNamespace, clusterName, clusterNamespace, dpuFlavorName, dpuFlavorNamespace)
+		Expect(err).To(HaveOccurred())
+	})
+
+	It("should not match ConfigMaps with different DPUFlavor annotations", func() {
+		cm := &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "bfcfg-template-different-flavor",
+				Namespace: namespace,
+				Labels: map[string]string{
+					cutil.BFCFGTemplateLabel: "true",
+				},
+				Annotations: map[string]string{
+					cutil.BFCFGTemplateBFBNameAnnotation:            bfbName,
+					cutil.BFCFGTemplateBFBNamespaceAnnotation:       bfbNamespace,
+					cutil.BFCFGTemplateClusterNameAnnotation:        clusterName,
+					cutil.BFCFGTemplateClusterNamespaceAnnotation:   clusterNamespace,
+					cutil.BFCFGTemplateDPUFlavorNameAnnotation:      "different-flavor",
+					cutil.BFCFGTemplateDPUFlavorNamespaceAnnotation: dpuFlavorNamespace,
+				},
+			},
+			Data: map[string]string{
+				ConfigMapDataKey: "template",
+			},
+		}
+		c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cm).Build()
+
+		_, err := getTemplateDataFromConfigMap(ctx, c, namespace, bfbName, bfbNamespace, clusterName, clusterNamespace, dpuFlavorName, dpuFlavorNamespace)
 		Expect(err).To(HaveOccurred())
 	})
 
@@ -500,7 +600,7 @@ var _ = Describe("getTemplateDataFromConfigMap", func() {
 		cm.Namespace = "other-namespace"
 		c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cm).Build()
 
-		_, err := getTemplateDataFromConfigMap(ctx, c, namespace, bfbName, bfbNamespace, clusterName, clusterNamespace)
+		_, err := getTemplateDataFromConfigMap(ctx, c, namespace, bfbName, bfbNamespace, clusterName, clusterNamespace, dpuFlavorName, dpuFlavorNamespace)
 		Expect(err).To(HaveOccurred())
 	})
 })

@@ -950,6 +950,14 @@ var _ = Describe("DPUSet", func() {
 			}).WithTimeout(10 * time.Second).Should(Succeed())
 		})
 
+		It("DPUSet: should reject AstraEnabled in GNOI install interface suite", func() {
+			By("creating dpuset with AstraEnabled enabled")
+			obj := createDPUSet("obj-dpuset")
+			obj.Spec.DPUTemplate.Spec.AstraEnabled = ptr.To(true)
+			err := k8sClient.Create(ctx, obj)
+			Expect(err).To(HaveOccurred())
+		})
+
 		It("DPUSet: should update NodeEffect Action from Taint to Drain", func() {
 			By("creating dpuset with Taint nodeEffect")
 			obj := createDPUSet("obj-dpuset")

@@ -47,7 +47,7 @@ func newDefaultVariables(defaults *release.Defaults) Variables {
 			operatorv1.MultusName:                 false,
 			operatorv1.SRIOVDevicePluginName:      false,
 			operatorv1.OVSCNIName:                 false,
-			operatorv1.NVIPAMName:                 false,
+			operatorv1.NVIPAMControllerName:       false,
 			operatorv1.SFCControllerName:          false,
 			operatorv1.DPUDetectorName:            false,
 			operatorv1.KamajiClusterManagerName:   false,
@@ -80,7 +80,7 @@ func newDefaultVariables(defaults *release.Defaults) Variables {
 			operatorv1.FlannelName:                defaults.DPUNetworkingHelmChart,
 			operatorv1.MultusName:                 defaults.DPUNetworkingHelmChart,
 			operatorv1.SRIOVDevicePluginName:      defaults.DPUNetworkingHelmChart,
-			operatorv1.NVIPAMName:                 defaults.DPUNetworkingHelmChart,
+			operatorv1.NVIPAMControllerName:       defaults.DPUNetworkingHelmChart,
 			operatorv1.OVSCNIName:                 defaults.DPUNetworkingHelmChart,
 			operatorv1.SFCControllerName:          defaults.DPUNetworkingHelmChart,
 			operatorv1.ServiceSetControllerName:   defaults.DPUNetworkingHelmChart,
@@ -169,7 +169,7 @@ type NodeSRIOVDevicePluginControllerVariables struct {
 }
 
 type OpenTelemetryCollectorVariables struct {
-	ManagementEndpoint *string
+	LoggingEndpoint string
 }
 
 func VariablesFromDPFOperatorConfig(defaults *release.Defaults, config *operatorv1.DPFOperatorConfig, dpuClusters []*dpucluster.Config) Variables {
@@ -402,10 +402,10 @@ func setMonitoringConfigs(variables Variables, config *operatorv1.DPFOperatorCon
 	if otelConfig := config.Spec.Monitoring.OpenTelemetryCollector; otelConfig != nil {
 		if otelConfig.Disabled() {
 			variables.DisableSystemComponents[operatorv1.OpenTelemetryCollectorName] = true
-		} else if otelConfig.Endpoint != nil {
+		} else if otelConfig.Logging != nil {
 			// Only enable if endpoint is explicitly provided
 			variables.DisableSystemComponents[operatorv1.OpenTelemetryCollectorName] = false
-			variables.OpenTelemetryCollector.ManagementEndpoint = otelConfig.Endpoint
+			variables.OpenTelemetryCollector.LoggingEndpoint = otelConfig.Logging.Endpoint
 		}
 		// If enabled but no endpoint provided, it remains disabled
 	}
@@ -434,7 +434,7 @@ func getContainerNameFromComponent(componentName operatorv1.ComponentName) opera
 		return operatorv1.MultusContainer
 	case operatorv1.SRIOVDevicePluginName:
 		return operatorv1.SRIOVDevicePluginContainer
-	case operatorv1.NVIPAMName:
+	case operatorv1.NVIPAMControllerName:
 		return operatorv1.NVIPAMContainerController
 	}
 	return ""

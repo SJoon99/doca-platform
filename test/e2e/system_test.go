@@ -43,7 +43,14 @@ func SetInput() {
 	By("Validating the input")
 	validateFlags()
 
+	By("Get control plane IP")
+	controlPlaneIP := getClusterControlPlaneIP(ctx, testClient)
+
 	By("Setting operatorConfig for the test")
+	var bfbPVCName *string
+	if conf.ProvisioningControllerPVCPath != nil {
+		bfbPVCName = ptr.To("bfb-pvc")
+	}
 	dpfOperatorConfig := &operatorv1.DPFOperatorConfig{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      configName,
@@ -52,7 +59,7 @@ func SetInput() {
 		},
 		Spec: operatorv1.DPFOperatorConfigSpec{
 			ProvisioningController: &operatorv1.ProvisioningControllerConfiguration{
-				BFBPersistentVolumeClaimName: ptr.To("bfb-pvc"),
+				BFBPersistentVolumeClaimName: bfbPVCName,
 			},
 			StaticClusterManager: &operatorv1.StaticClusterManagerConfiguration{
 				BaseComponentConfig: operatorv1.BaseComponentConfig{
@@ -68,6 +75,11 @@ func SetInput() {
 			},
 			Monitoring: &operatorv1.MonitoringConfiguration{
 				Disabled: ptr.To(false),
+				OpenTelemetryCollector: &operatorv1.OpenTelemetryCollectorConfiguration{
+					Logging: &operatorv1.OpenTelemetryCollectorLoggingConfiguration{
+						Endpoint: fmt.Sprintf("%s%s:%d", otelEndpointSchema, controlPlaneIP, otelNodePort),
+					},
+				},
 			},
 			NodeSRIOVDevicePluginController: &operatorv1.NodeSRIOVDevicePluginControllerConfiguration{
 				BaseComponentConfig: operatorv1.BaseComponentConfig{
@@ -81,13 +93,10 @@ func SetInput() {
 		dpfOperatorConfig.Spec.StaticClusterManager.BaseComponentConfig.Disable = ptr.To(true)
 		dpfOperatorConfig.Spec.KamajiClusterManager.BaseComponentConfig.Disable = ptr.To(false)
 		dpfOperatorConfig.Spec.NodeSRIOVDevicePluginController.BaseComponentConfig.Disable = ptr.To(true)
-		By("Get control-plane IP")
-		trustedHostIP := getClusterControlPlaneIP(ctx, testClient)
-		By(fmt.Sprintf("Zero trust mode is applied to operatorConfig with trusted host IP %s", trustedHostIP))
+		By(fmt.Sprintf("Zero trust mode is applied to operatorConfig with trusted host IP %s", controlPlaneIP))
 		dpfOperatorConfig.Spec.ProvisioningController.InstallInterface = &operatorv1.ProvisioningInstallInterface{
 			InstallViaRedfish: &operatorv1.InstallViaRedfish{
-				// Use NodePort service port 30082
-				BFBRegistryAddress:   fmt.Sprintf("%s:30082", trustedHostIP),
+				BFBRegistryAddress:   fmt.Sprintf("%s:%d", controlPlaneIP, bfbRegistryNodePort),
 				SkipDPUNodeDiscovery: ptr.To(false),
 			},
 		}
@@ -104,10 +113,19 @@ func SetInput() {
 				}
 			}
 		}
-		By(fmt.Sprintf("Using API server VIP %s:%d for zero-trust kubeconfig", trustedHostIP, apiServerPort))
+		By(fmt.Sprintf("Using API server VIP %s:%d for zero-trust kubeconfig", controlPlaneIP, apiServerPort))
 		dpfOperatorConfig.Spec.Overrides = &operatorv1.Overrides{
-			KubernetesAPIServerVIP:  ptr.To(trustedHostIP),
+			KubernetesAPIServerVIP:  ptr.To(controlPlaneIP),
 			KubernetesAPIServerPort: ptr.To(apiServerPort),
+		}
+	}
+
+	if isGinkgoLabelApplied(Domain.Scale) {
+		// For scale environments, the nodes are fake, therefore we can't have DPUDetector running
+		dpfOperatorConfig.Spec.DPUDetector = &operatorv1.DPUDetectorConfiguration{
+			BaseComponentConfig: operatorv1.BaseComponentConfig{
+				Disable: ptr.To(true),
+			},
 		}
 	}
 
@@ -266,30 +284,6 @@ var _ = Describe("DPF System tests - Core", SpecPriority(CoreTestPriority), Labe
 		})
 	})
 
-	Context("KSM Metrics Collection", Labels{Domain.ZeroTrust}, func() {
-		It("validate host cluster kube-state-metrics is accessible", func() {
-			VerifyHostKSMMetricsCollection(ctx)
-		})
-		It("validate DPU cluster kube-state-metrics is accessible", func() {
-			By("Waiting for DPU cluster kube-state-metrics to be ready")
-			VerifyClusterPods(ctx, input.client, []string{"in-cluster-kube-state-metrics"})
-			By("Validating DPU cluster kube-state-metrics accessibility")
-			VerifyDPUKSMMetricsCollection(ctx, input)
-		})
-	})
-
-	Context("Node Problem Detector", Labels{Domain.ZeroTrust, Domain.RequiresNodes}, func() {
-		It("validate node-problem-detector is reporting DPU-specific node conditions", func() {
-			if !input.hasDpuNodes() {
-				Skip("Skip Node Problem Detector test as there are no DPU nodes")
-			}
-			By("Waiting for node-problem-detector to be ready")
-			VerifyClusterPods(ctx, dpuClusterClient[0], []string{"node-problem-detector"})
-			By("Validating node-problem-detector conditions for DPU nodes")
-			VerifyNodeProblemDetectorConditions(ctx, input)
-		})
-	})
-
 	Context("DPU Service IPAM", Labels{Domain.ZeroTrust}, func() {
 		It("create an invalid DPUServiceIPAM and ensure that the webhook rejects the request", func() {
 			ValidateDPUServiceIPAMCreationInvalid(ctx, input)
@@ -368,6 +362,71 @@ var _ = Describe("DPF System tests - Core", SpecPriority(CoreTestPriority), Labe
 		})
 	})
 
+	Context("Observability", Labels{Domain.Observability, Domain.ZeroTrust}, func() {
+		Context("Monitoring", func() {
+			Context("KSM Metrics Collection", Labels{Domain.ZeroTrust}, func() {
+				It("validate host cluster kube-state-metrics is accessible", func() {
+					VerifyHostKSMMetricsCollection(ctx)
+				})
+				It("validate DPU cluster kube-state-metrics is accessible", func() {
+					By("Waiting for DPU cluster kube-state-metrics to be ready")
+					VerifyClusterPods(ctx, input.client, []string{"in-cluster-kube-state-metrics"})
+					By("Validating DPU cluster kube-state-metrics accessibility")
+					VerifyDPUKSMMetricsCollection(ctx, input)
+				})
+			})
+
+			Context("Node Problem Detector", Labels{Domain.ZeroTrust, Domain.RequiresNodes}, func() {
+				It("validate node-problem-detector is reporting DPU-specific node conditions", func() {
+					if !input.hasDpuNodes() {
+						Skip("Skip Node Problem Detector test as there are no DPU nodes")
+					}
+					By("Waiting for node-problem-detector to be ready")
+					VerifyClusterPods(ctx, dpuClusterClient[0], []string{"node-problem-detector"})
+					By("Validating node-problem-detector conditions for DPU nodes")
+					VerifyNodeProblemDetectorConditions(ctx, input)
+				})
+			})
+		})
+		Context("Logging Infrastructure", func() {
+			Context("Component Deployment", func() {
+				It("should verify OpenTelemetry Collector DaemonSets running in host cluster", func() {
+					By("Running in host cluster")
+					VerifyClusterPods(ctx, input.client, []string{"opentelemetry-collector"})
+				})
+				It("should verify OpenTelemetry Collector DaemonSets running in DPU cluster", Labels{Domain.RequiresNodes}, func() {
+					if !input.hasDpuNodes() {
+						Skip("Skip test as there are no DPU nodes")
+					}
+					By("Running in DPUCluster")
+					VerifyClusterPods(ctx, dpuClusterClient[0], []string{"opentelemetry-collector"})
+				})
+			})
+
+			Context("Configuration", func() {
+				It("should verify DPU cluster collector configuration", Labels{Domain.RequiresNodes}, func() {
+					if !input.hasDpuNodes() {
+						Skip("Skip test as there are no DPU nodes")
+					}
+					ValidateDPUClusterOpenTelemetryConfiguration(ctx, input)
+				})
+			})
+
+			Context("Log Flow", func() {
+				It("should collect and forward logs from management cluster to Loki", func() {
+					ValidateManagementClusterLogFlow(ctx, input)
+				})
+
+				It("should collect and forward logs from DPU cluster to Loki", Labels{Domain.RequiresNodes}, func() {
+					if !input.hasDpuNodes() {
+						Skip("Skip test as there are no DPU nodes")
+					}
+					ValidateDPUClusterLogFlow(ctx, input)
+				})
+			})
+		})
+	})
+
 	// Config Ports check is not valid for ZeroTrust
 	Context("DPU Service Config Ports", Labels{Domain.RequiresNodes}, Serial, func() {
 		It("expose ConfigPorts via DPUService and test reachability", func() {
@@ -403,10 +462,10 @@ var _ = Describe("DPF System tests - Core", SpecPriority(CoreTestPriority), Labe
 		It("verify overrides path setting for system DPUServices", Labels{Domain.ZeroTrust}, func() {
 			ValidateDPFOperatorPathConfiguration(ctx, input)
 		})
-		It("Change the MaxDPUParallelInstallations in the operatorConfig and verify that the provisioning controller is restarted", Labels{Domain.ZeroTrust}, func() {
+		It("change the MaxDPUParallelInstallations in the operatorConfig and verify that the provisioning controller is restarted", Labels{Domain.ZeroTrust}, func() {
 			ValidateDPFOperatorMaxDPUParallelInstallations(ctx, input)
 		})
-		It("Change the flannel podCIDR in the operatorConfig and check that it is set", Labels{Domain.ZeroTrust}, func() {
+		It("change the flannel podCIDR in the operatorConfig and check that it is set", Labels{Domain.ZeroTrust}, func() {
 			ValidateDPFOperatorFlannelPodCIDRChange(ctx, input)
 		})
 
@@ -423,7 +482,7 @@ var _ = Describe("DPF System tests - Core", SpecPriority(CoreTestPriority), Labe
 	// deleted.
 	Context("Validate DPUDeployment full creation", Serial, Ordered, func() {
 		BeforeAll(func() {
-			By("should validate DPUDeployment and underlying objects creation")
+			By("Should validate DPUDeployment and underlying objects creation")
 			ValidateDPUDeploymentFullCreation(ctx, input)
 		})
 		It("should validate DPUDeployment becomes ready", Labels{Domain.ZeroTrust}, func() {

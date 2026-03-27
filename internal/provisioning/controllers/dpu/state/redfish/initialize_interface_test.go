@@ -211,6 +211,8 @@ var _ = Describe("InitializeInterface", func() {
 
 		By("Step 2: Update DPU status to Rebooting and set InterfaceInitialized condition")
 		dpu.Status = status
+		// Mirror dpu_controller.UpdateDPUStatus: when phase changes, PreviousPhase records the prior phase.
+		dpu.Status.PreviousPhase = provisioningv1.DPUInitializeInterface
 		cutil.SetDPUCondition(&dpu.Status, cutil.DPUCondition(provisioningv1.DPUCondInterfaceInitialized, "", ""))
 
 		By("Step 3: Run Rebooting phase handler")
@@ -446,18 +448,10 @@ var _ = Describe("InitializeInterface", func() {
 			}
 		})
 
-		// Helper to set DPUDevice SecureBoot status
-		setDeviceSecureBoot := func(enabled bool) {
-			patch := client.MergeFrom(dpuDevice.DeepCopy())
-			dpuDevice.Status.SecureBoot = &provisioningv1.SecureBootStatus{Enabled: ptr.To(enabled)}
-			Expect(k8sClient.Status().Patch(ctx, dpuDevice, patch)).To(Succeed())
-		}
-
 		It("should stage enable and transition to PerformArmForceRestart on mismatch", func() {
 			mockServer.SetSecureBootCurrentBoot(false)
 			mockServer.SetSecureBootEnable(false)
 			dpu.Spec.SecureBoot = ptr.To(true)
-			setDeviceSecureBoot(false)
 
 			status, err := InitializeInterface(ctx, dpu, ctrlCtx)
 			Expect(err).NotTo(HaveOccurred())
@@ -473,7 +467,6 @@ var _ = Describe("InitializeInterface", func() {
 			mockServer.SetSecureBootCurrentBoot(true)
 			mockServer.SetSecureBootEnable(true)
 			dpu.Spec.SecureBoot = ptr.To(false)
-			setDeviceSecureBoot(true)
 
 			status, err := InitializeInterface(ctx, dpu, ctrlCtx)
 			Expect(err).NotTo(HaveOccurred())
@@ -485,7 +478,6 @@ var _ = Describe("InitializeInterface", func() {
 			mockServer.SetSecureBootCurrentBoot(true)
 			mockServer.SetSecureBootEnable(true)
 			dpu.Spec.SecureBoot = ptr.To(true)
-			setDeviceSecureBoot(true)
 
 			status, err := InitializeInterface(ctx, dpu, ctrlCtx)
 			Expect(err).To(Succeed())
@@ -504,7 +496,6 @@ var _ = Describe("InitializeInterface", func() {
 
 		It("should re-assert PerformArmForceRestart when tracker in progress but phase is still Initialize Interface", func() {
 			dpu.Spec.SecureBoot = ptr.To(true)
-			setDeviceSecureBoot(false)
 			tracker := &dutil.ArmRestartTracker{
 				MaxAttempts:       2,
 				Attempt:           0,
@@ -553,22 +544,23 @@ var _ = Describe("InitializeInterface", func() {
 			Expect(loaded).To(BeNil(), "orphaned tracker should be cleaned up")
 		})
 
-		It("should retry when DPUDevice.Status.SecureBoot is not yet detected", func() {
+		It("should retry when BMC GetSecureBoot fails during initial detection", func() {
+			mockServer.SetSecureBootError(true)
 			dpu.Spec.SecureBoot = ptr.To(true)
-			// DPUDevice.Status.SecureBoot is nil by default from setDPUDeviceReady
 
 			status, err := InitializeInterface(ctx, dpu, ctrlCtx)
 			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("not yet detected"))
 			Expect(status.Phase).To(Equal(provisioningv1.DPUInitializeInterface))
+			_, cond := cutil.GetDPUCondition(&status, provisioningv1.DPUCondInterfaceInitialized.String())
+			Expect(cond).NotTo(BeNil())
+			Expect(cond.Reason).To(Equal("FailedToGetSecureBootStatus"))
 		})
 
 		It("should retry when BMC Secure Boot staging fails", func() {
 			mockServer.SetSecureBootCurrentBoot(true)
 			mockServer.SetSecureBootEnable(true)
-			mockServer.SetSecureBootError(true)
+			mockServer.SetSecureBootPatchError(true)
 			dpu.Spec.SecureBoot = ptr.To(false)
-			setDeviceSecureBoot(true)
 
 			_, err := InitializeInterface(ctx, dpu, ctrlCtx)
 			Expect(err).To(HaveOccurred())
@@ -732,7 +724,9 @@ var _ = Describe("InitializeInterface", func() {
 			Expect(*status.SecureBoot.Enabled).To(BeFalse(),
 				"status should reflect actual BMC value, not desired")
 			loaded, _ := dutil.LoadArmRestartTracker(dpu)
-			Expect(loaded).To(BeNil(), "tracker should be cleared on terminal error")
+			Expect(loaded).NotTo(BeNil(), "tracker should be preserved on terminal error for forensics and race prevention")
+			Expect(loaded.MaxAttempts).To(Equal(2))
+			Expect(loaded.Attempt).To(Equal(2))
 		})
 
 		It("should go to DPUError when mismatch persists past verification timeout", func() {
@@ -764,7 +758,50 @@ var _ = Describe("InitializeInterface", func() {
 			Expect(*status.SecureBoot.Enabled).To(BeFalse(),
 				"status should reflect actual BMC value, not desired")
 			loaded, _ := dutil.LoadArmRestartTracker(dpu)
-			Expect(loaded).To(BeNil(), "tracker should be cleared on terminal error")
+			Expect(loaded).NotTo(BeNil(), "tracker should be preserved on terminal error for forensics and race prevention")
+			Expect(loaded.MaxAttempts).To(Equal(2))
+			Expect(loaded.Attempt).To(Equal(2))
+		})
+
+		It("should remain in DPUError on re-reconcile when tracker is preserved after timeout", func() {
+			dpu.Spec.SecureBoot = ptr.To(true)
+			mockServer.SetSecureBootCurrentBoot(false)
+			tracker := &dutil.ArmRestartTracker{
+				MaxAttempts:       2,
+				Attempt:           2,
+				InitialGeneration: dpu.Generation,
+			}
+			Expect(dutil.SaveArmRestartTracker(dpu, tracker)).To(Succeed())
+
+			By("Set ArmForceRestarted condition with expired LastTransitionTime")
+			dpu.Status.Conditions = append(dpu.Status.Conditions, metav1.Condition{
+				Type:               provisioningv1.DPUCondArmForceRestarted.String(),
+				Status:             metav1.ConditionTrue,
+				Reason:             provisioningv1.DPUCondArmForceRestarted.String(),
+				LastTransitionTime: metav1.NewTime(time.Now().Add(-secureBootVerificationTimeout - time.Second)),
+			})
+
+			By("First reconcile: should transition to DPUError")
+			status1, err := InitializeInterface(ctx, dpu, ctrlCtx)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(status1.Phase).To(Equal(provisioningv1.DPUError))
+			_, cond1 := cutil.GetDPUCondition(&status1, provisioningv1.DPUCondInterfaceInitialized.String())
+			Expect(cond1).NotTo(BeNil())
+			Expect(cond1.Reason).To(Equal("SecureBootConfigurationFailed"))
+
+			By("Simulate race: second reconcile with preserved tracker and phase still InitializeInterface")
+			dpu.Status = status1
+			dpu.Status.Phase = provisioningv1.DPUInitializeInterface
+			status2, err := InitializeInterface(ctx, dpu, ctrlCtx)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(status2.Phase).To(Equal(provisioningv1.DPUError),
+				"second reconcile should still produce DPUError, not re-stage Secure Boot")
+			_, cond2 := cutil.GetDPUCondition(&status2, provisioningv1.DPUCondInterfaceInitialized.String())
+			Expect(cond2).NotTo(BeNil())
+			Expect(cond2.Reason).To(Equal("SecureBootConfigurationFailed"),
+				"should not have re-staged (SecureBootConfigurationStaged)")
+			loaded, _ := dutil.LoadArmRestartTracker(dpu)
+			Expect(loaded).NotTo(BeNil(), "tracker must remain to prevent race-driven re-staging")
 		})
 	})
 

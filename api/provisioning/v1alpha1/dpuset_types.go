@@ -132,6 +132,9 @@ type DPUTemplateSpec struct {
 	// +kubebuilder:validation:MinLength=1
 	// +required
 	DPUFlavor string `json:"dpuFlavor"`
+	// AstraEnabled indicates whether E/W NIC configuration (Astra) is enabled
+	// +optional
+	AstraEnabled *bool `json:"astraEnabled,omitempty"`
 	// SecureBoot specifies whether UEFI Secure Boot should be enabled.
 	// +optional
 	SecureBoot *bool `json:"secureBoot,omitempty"`
@@ -310,6 +313,14 @@ type DPUSet struct {
 
 	Spec   DPUSetSpec   `json:"spec,omitempty"`
 	Status DPUSetStatus `json:"status,omitempty"`
+}
+
+// IsAstraEnabledForNonBlueField4 returns true if Astra is enabled on this DPUSet
+// and the target DPUDevice is not a BlueField4.
+func (c *DPUSet) IsAstraEnabledForNonBlueField4(dpuDevice DPUDevice) bool {
+	return c.Spec.DPUTemplate.Spec.AstraEnabled != nil &&
+		*c.Spec.DPUTemplate.Spec.AstraEnabled &&
+		dpuDevice.Status.DPUType != DPUTypeBlueField4
 }
 
 // +kubebuilder:object:root=true

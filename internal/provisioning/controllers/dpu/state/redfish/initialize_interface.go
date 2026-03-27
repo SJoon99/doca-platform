@@ -39,11 +39,11 @@ const (
 	// the first restart applies the BIOS setting and the second validates it.
 	secureBootRequiredRestarts = 2
 
-	// secureBootVerificationTimeout is the maximum time after OS boot detection
+	// secureBootVerificationTimeout is the maximum time after all restarts completed
 	// to wait for the BMC to reflect the new SecureBootCurrentBoot value.
 	// Anchored to ArmForceRestarted condition's LastTransitionTime, which is set
-	// when PerformArmForceRestart detects AllRestartsDone && OS running.
-	secureBootVerificationTimeout = 90 * time.Second
+	// when PerformArmForceRestart detects AllRestartsDone (regardless of OS state).
+	secureBootVerificationTimeout = 2 * time.Minute
 )
 
 func InitializeInterface(ctx context.Context, dpu *provisioningv1.DPU, ctrlCtx *dutil.ControllerContext) (provisioningv1.DPUStatus, error) {
@@ -102,7 +102,7 @@ func InitializeInterface(ctx context.Context, dpu *provisioningv1.DPU, ctrlCtx *
 	}
 
 	// Configure Secure Boot if requested, may trigger phase transition
-	done, err := reconcileSecureBoot(ctx, dpu, device, state, tlsClient)
+	done, err := reconcileSecureBoot(ctx, dpu, state, tlsClient)
 	if err != nil {
 		return *state, err
 	}
@@ -159,7 +159,7 @@ func InitializeInterface(ctx context.Context, dpu *provisioningv1.DPU, ctrlCtx *
 // Returns (true, nil) when a phase transition was set and the caller should return early.
 // Returns (false, nil) when no action was needed and the caller should continue.
 // Returns (false, err) on retryable errors.
-func reconcileSecureBoot(ctx context.Context, dpu *provisioningv1.DPU, device *provisioningv1.DPUDevice, state *provisioningv1.DPUStatus, tlsClient *rfclient.Client) (bool, error) {
+func reconcileSecureBoot(ctx context.Context, dpu *provisioningv1.DPU, state *provisioningv1.DPUStatus, tlsClient *rfclient.Client) (bool, error) {
 	tracker, err := dutil.LoadArmRestartTracker(dpu)
 	if err != nil {
 		log.FromContext(ctx).Error(err, "Failed to load ArmRestartTracker")
@@ -182,11 +182,13 @@ func reconcileSecureBoot(ctx context.Context, dpu *provisioningv1.DPU, device *p
 	}
 
 	// Initial detection: check if configuration is needed
-	return detectAndStageSecureBoot(ctx, dpu, device, state, tlsClient)
+	return detectAndStageSecureBoot(ctx, dpu, state, tlsClient)
 }
 
 // verifySecureBootAfterRestarts verifies that the BMC applied the Secure Boot configuration
-// after all ARM restarts completed. Clears the tracker and updates DPU status.
+// after all ARM restarts completed. On success the tracker is cleared; on terminal error the
+// tracker is intentionally preserved to avoid a SerialPatcher race (metadata patch triggering
+// a new reconcile before the status patch lands) and to retain forensic state.
 //
 // Returns (true, nil) to stay in current phase (retry or terminal error),
 // (false, nil) on success, or (false, err) on retryable BMC failure.
@@ -219,7 +221,7 @@ func verifySecureBootAfterRestarts(ctx context.Context, dpu *provisioningv1.DPU,
 	}
 
 	// Mismatch -- retry while within the verification window.
-	// Primary anchor: ArmForceRestarted.LastTransitionTime (marks OS boot detection).
+	// Primary anchor: ArmForceRestarted.LastTransitionTime (marks all restarts completed).
 	// Fallback: tracker.IsStale() guards against infinite retry if the condition
 	// is permanently absent (e.g., corrupted state after controller restart).
 	_, armCond := cutil.GetDPUCondition(state, provisioningv1.DPUCondArmForceRestarted.String())
@@ -240,7 +242,6 @@ func verifySecureBootAfterRestarts(ctx context.Context, dpu *provisioningv1.DPU,
 	cutil.SetDPUCondition(state, cutil.NewCondition(
 		string(provisioningv1.DPUCondInterfaceInitialized),
 		err, "SecureBootConfigurationFailed", err.Error()))
-	dutil.ClearArmRestartTracker(dpu)
 	state.Phase = provisioningv1.DPUError
 	return true, nil
 }
@@ -250,21 +251,19 @@ func verifySecureBootAfterRestarts(ctx context.Context, dpu *provisioningv1.DPU,
 // a tracker to initiate ARM restarts.
 // Returns (true, nil) on phase transition, (false, nil) when already in desired state,
 // or (false, err) on retryable failure.
-func detectAndStageSecureBoot(ctx context.Context, dpu *provisioningv1.DPU, device *provisioningv1.DPUDevice, state *provisioningv1.DPUStatus, tlsClient *rfclient.Client) (bool, error) {
+func detectAndStageSecureBoot(ctx context.Context, dpu *provisioningv1.DPU, state *provisioningv1.DPUStatus, tlsClient *rfclient.Client) (bool, error) {
 	log := log.FromContext(ctx)
 
-	secureBootStatus := device.Status.SecureBoot
-	if secureBootStatus == nil || secureBootStatus.Enabled == nil {
-		err := fmt.Errorf("DPUDevice.Status.SecureBoot not yet detected")
+	_, sbInfo, err := tlsClient.GetSecureBoot()
+	if err != nil {
 		cutil.SetDPUCondition(state, cutil.NewCondition(
 			string(provisioningv1.DPUCondInterfaceInitialized),
-			err, "SecureBootStatusNotDetected",
-			"Waiting for initial hardware discovery"))
-		return false, err // Retryable - requeue until hardware discovery populates status
+			err, "FailedToGetSecureBootStatus", err.Error()))
+		return false, err // Retryable - BMC may be temporarily unreachable
 	}
 
 	desiredEnabled := *dpu.Spec.SecureBoot
-	currentEnabled := *secureBootStatus.Enabled
+	currentEnabled := sbInfo != nil && sbInfo.IsCurrentlyActive()
 
 	// Already in desired state - sync status and continue
 	if desiredEnabled == currentEnabled {
@@ -276,7 +275,6 @@ func detectAndStageSecureBoot(ctx context.Context, dpu *provisioningv1.DPU, devi
 	log.Info("Secure Boot configuration mismatch, staging change",
 		"dpu", dpu.Name, "desired", desiredEnabled, "current", currentEnabled)
 
-	var err error
 	if desiredEnabled {
 		_, err = tlsClient.EnableSecureBoot()
 	} else {

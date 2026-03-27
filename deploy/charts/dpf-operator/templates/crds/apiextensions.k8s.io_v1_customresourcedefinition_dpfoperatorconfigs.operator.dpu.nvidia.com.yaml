@@ -720,12 +720,6 @@ spec:
                         description: Disable ensures the component is not deployed
                           when set to true.
                         type: boolean
-                      endpoint:
-                        description: |-
-                          Endpoint is the OTLP endpoint where the DPU cluster opentelemetry-collector sends logs and metrics.
-                          This could be the management cluster's opentelemetry-collector endpoint.
-                          If not specified, logs will not be forwarded from DPU clusters.
-                        type: string
                       helmChart:
                         description: |-
                           HelmChart overrides the helm chart used by the ServiceSet controller.
@@ -733,6 +727,20 @@ spec:
                           OCI registry or a web-based repository.
                         pattern: ^(oci://|https://).+$
                         type: string
+                      logging:
+                        description: |-
+                          Logging contains the configuration for the opentelemetry-collector logging component.
+                          If not specified, logging will not be streamed.
+                        properties:
+                          endpoint:
+                            description: |-
+                              Endpoint is the OTLP endpoint where the DPU cluster opentelemetry-collector sends data to.
+                              This could be the management cluster's opentelemetry-collector endpoint.
+                              If not specified, nothing will be forwarded from DPU clusters.
+                            type: string
+                        required:
+                        - endpoint
+                        type: object
                     type: object
                 type: object
               multus:
@@ -1029,6 +1037,10 @@ spec:
                       Node contains the configuration for the NVIPAM node component.
                       It contains the image for the node and its resource requirements.
                     properties:
+                      image:
+                        description: Image is a reference to a container image.
+                        pattern: ^((?:(?:(?:[a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9])(?:\.(?:[a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]))*|\[(?:[a-fA-F0-9:]+)\])(?::[0-9]+)?/)?[a-z0-9]+(?:(?:[._]|__|[-]+)[a-z0-9]+)*(?:/[a-z0-9]+(?:(?:[._]|__|[-]+)[a-z0-9]+)*)*)(?::([\w][\w.-]{0,127}))?(?:@([A-Za-z][A-Za-z0-9]*(?:[-_+.][A-Za-z][A-Za-z0-9]*)*[:][[:xdigit:]]{32,}))?$
+                        type: string
                       resources:
                         description: |-
                           Resources defines the memory and CPU resource requests and limits for the component.
