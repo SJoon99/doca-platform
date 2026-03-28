@@ -1,0 +1,7 @@
+{
+  "tool_name": "Bash",
+  "tool_input_preview": "{\"command\":\"ssh joon@10.30.0.184 \\\"docker push 10.34.25.12:80/library/dpf-system:dev 2>&1\\\"\",\"description\":\"Try pushing dpf-system image to Harbor\"}",
+  "error": "Exit code 1\nThe push refers to repository [10.34.25.12:80/library/dpf-system]\ndd843f0a96ab: Preparing\n32bbb69b0aeb: Preparing\nbbeff2c2a884: Preparing\nc394ed778a21: Preparing\n1ef8a84e0109: Preparing\n8b85971339cf: Preparing\n8b85971339cf: Waiting\nbbeff2c2a884: Retrying in 1 second\nc394ed778a21: Retrying in 1 second\n1ef8a84e0109: Retrying in 1 second\nEOF",
+  "timestamp": "2026-03-28T02:05:45.382Z",
+  "retry_count": 1
+}
