@@ -66,3 +66,4 @@ build/
 
 # Local project context
 CLAUDE.md
+.omc/
