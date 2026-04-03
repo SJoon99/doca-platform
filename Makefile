@@ -1211,8 +1211,10 @@ binary-dpuagent: ## Build the DPU agent binary.
 
 # DPU Agent packaging variables
 DPUAGENT_PKG_DIR = $(CURDIR)/internal/provisioning/dpuagent/packaging
-# Strip the leading "v" from TAG: Debian policy requires package versions to start with a digit.
-DPUAGENT_PKG_VERSION = $(subst v,,$(TAG))
+# Normalize TAG into a Debian-safe package version.
+# - keep semver tags like v0.1.0 -> 0.1.0
+# - for non-semver tags like public-main-... prefix 0~ so the version starts with a digit
+DPUAGENT_PKG_VERSION = $(shell printf '%s' '$(TAG)' | sed -E 's/^v([0-9])/\1/; s/[^0-9A-Za-z.+:~-]+/-/g; /^[0-9]/! s/^/0~/')
 DPUAGENT_DEB = $(LOCALBIN)/dpu-agent_$(DPUAGENT_PKG_VERSION)_arm64.deb
 DPUAGENT_RPM = $(LOCALBIN)/dpu-agent-$(DPUAGENT_PKG_VERSION)-1.aarch64.rpm
 

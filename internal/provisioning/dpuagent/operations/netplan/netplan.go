@@ -35,6 +35,10 @@ import (
 const (
 	PFMTU              = 9216
 	defaultNetplanRoot = "/etc/netplan"
+	// defaultCommBridgeCIDR is a fixed address for the DPU communication bridge
+	// in environments where the management network does not provide DHCP leases
+	// to the DPU worker attach path.
+	defaultCommBridgeCIDR = "10.34.20.99/12"
 
 	// tmfifoIPv6 is the fixed IPv6 link-local address for the tmfifo_net0 interface on the DPU.
 	// This IP is used to communicate with the host agent running on the host.
@@ -188,8 +192,11 @@ func (n *ConfigureNetwork) setBridgeCommCh(cpMTU int32) error {
 			Bridges: map[string]netplan.Bridge{
 				"br-comm-ch": {
 					Ethernet: netplan.Ethernet{
-						DHCP4: ptr.To(true),
-						MTU:   ptr.To(cpMTU),
+						DHCP4:     ptr.To(false),
+						DHCP6:     ptr.To(false),
+						LinkLocal: ptr.To([]string{}),
+						MTU:       ptr.To(cpMTU),
+						Addresses: []string{defaultCommBridgeCIDR},
 					},
 					Interfaces: []string{"pf0vf0"},
 				},

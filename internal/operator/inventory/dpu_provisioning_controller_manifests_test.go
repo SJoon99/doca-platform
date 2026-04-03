@@ -290,11 +290,15 @@ func TestProvisioningControllerObjects_GenerateManifests(t *testing.T) {
 		g.Expect(gotDeployment.Spec.Template.Spec.ImagePullSecrets).To(HaveLen(2))
 		g.Expect(gotDeployment.Spec.Template.Spec.ImagePullSecrets[0].Name).To(Equal(expectedImagePullSecret1))
 		g.Expect(gotDeployment.Spec.Template.Spec.ImagePullSecrets[1].Name).To(Equal(expectedImagePullSecret2))
-		// * check bfb pvc (no init container when using PVC)
+		// * check bfb pvc and ensure /bfb permissions are prepared for the non-root manager
 		g.Expect(gotDeployment.Spec.Template.Spec.Volumes).To(HaveLen(3))
 		g.Expect(gotDeployment.Spec.Template.Spec.Volumes[1].PersistentVolumeClaim).NotTo(BeNil())
 		g.Expect(gotDeployment.Spec.Template.Spec.Volumes[1].PersistentVolumeClaim.ClaimName).To(Equal(expectedPVC))
-		g.Expect(gotDeployment.Spec.Template.Spec.InitContainers).To(BeEmpty(), "no init container when BFB PVC is set")
+		g.Expect(gotDeployment.Spec.Template.Spec.InitContainers).To(HaveLen(1))
+		initC := gotDeployment.Spec.Template.Spec.InitContainers[0]
+		g.Expect(initC.Name).To(Equal(prepareLocalStorageInitContainerName))
+		g.Expect(initC.Command).To(Equal([]string{"sh", "-c", "mkdir -p /bfb && chown -R 65532:65532 /bfb"}))
+		g.Expect(initC.VolumeMounts).To(ContainElement(corev1.VolumeMount{Name: bfbVolumeName, MountPath: "/bfb"}))
 		// * check args of the manager container
 		var container *corev1.Container
 		for _, c := range gotDeployment.Spec.Template.Spec.Containers {

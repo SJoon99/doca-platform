@@ -373,7 +373,8 @@ func (p *provisioningControllerObjects) setBFBPersistentVolumeClaim(deploy *apps
 		return fmt.Errorf(errManagerContainerNotFoundFmt, managerContainerName)
 	}
 
-	// If PVC name is provided, use the persistent volume.
+	// If PVC name is provided, use the persistent volume and prepare /bfb so the
+	// non-root manager can write downloaded BFB artifacts into the mounted volume.
 	if vars.DPFProvisioningController.BFBPersistentVolumeClaimName != nil &&
 		*vars.DPFProvisioningController.BFBPersistentVolumeClaimName != "" {
 		vol.VolumeSource = corev1.VolumeSource{
@@ -382,8 +383,7 @@ func (p *provisioningControllerObjects) setBFBPersistentVolumeClaim(deploy *apps
 			},
 		}
 		vol.HostPath = nil
-		// Ensure no init container while using persistent volume.
-		deploy.Spec.Template.Spec.InitContainers = filterOutInitContainer(deploy.Spec.Template.Spec.InitContainers, prepareLocalStorageInitContainerName)
+		addBFBHostPathInitContainer(deploy)
 		return setFlags(c, fmt.Sprintf("--bfb-pvc=%s", *vars.DPFProvisioningController.BFBPersistentVolumeClaimName))
 	}
 	// Use hostPath and add init-container to prepare the directory.

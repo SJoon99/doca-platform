@@ -146,6 +146,14 @@ var _ = Describe("Netplan", func() {
 			_, err = os.Stat(filepath.Join(tempDir, "99-dpf-comm-ch.yaml"))
 			Expect(err).NotTo(HaveOccurred())
 
+			By("verifying br-comm-ch is configured with a static IPv4 address")
+			commBridgeFile := filepath.Join(tempDir, "99-dpf-comm-ch.yaml")
+			content, err = os.ReadFile(commBridgeFile)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(string(content)).To(ContainSubstring("br-comm-ch"))
+			Expect(string(content)).To(ContainSubstring("10.34.20.99/12"))
+			Expect(string(content)).To(ContainSubstring("dhcp4: false"))
+
 			_, err = os.Stat(filepath.Join(tempDir, "97-pf-mtu.yaml"))
 			Expect(err).NotTo(HaveOccurred())
 
