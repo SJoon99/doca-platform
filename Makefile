@@ -22,6 +22,7 @@ PROJECT_DIR := $(shell cd $(dir $(lastword $(MAKEFILE_LIST))) && pwd -L)
 PROJECT_DIR := $(patsubst %/,%,$(PROJECT_DIR))
 
 GO_VERSION ?= $(shell awk '/^toolchain /{print $$2}' go.mod | awk -F 'go' '{print $$2}')
+GOTOOLCHAIN ?= go$(GO_VERSION)+auto
 
 ## Include Make modules which are split up in this repo for better structure.
 include hack/tools/tools.mk
@@ -248,7 +249,10 @@ generate-manifests-operator: controller-gen kustomize ## Generate manifests e.g.
 	paths="./cmd/static-cluster-manager/..." \
 	paths="./internal/operator/..." \
 	paths="./internal/clustermanager/..." \
-	paths="./internal/provisioning/..." \
+	paths="./internal/provisioning/controllers/..." \
+	paths="./internal/provisioning/bfbregistry/..." \
+	paths="./internal/provisioning/webhooks/..." \
+	paths="./internal/provisioning/utils/..." \
 	paths="./api/operator/..." \
 	crd:crdVersions=v1 \
 	rbac:roleName="dpf-operator-manager-role" \
@@ -329,7 +333,7 @@ generate-manifests-release-defaults: envsubst ## Generates manifests that contai
 TEMPLATES_DIR ?= $(PROJECT_DIR)/internal/operator/inventory/templates
 EMBEDDED_MANIFESTS_DIR ?= $(PROJECT_DIR)/internal/operator/inventory/manifests
 .PHONY: generate-manifests-operator-embedded
-generate-manifests-operator-embedded: kustomize envsubst generate-manifests-dpuservice generate-manifests-provisioning generate-manifests-release-defaults generate-manifests-kamaji-cluster-manager generate-manifests-static-cluster-manager generate-manifests-nodesriovdeviceplugin ## Generates manifests that are embedded into the operator binary.
+generate-manifests-operator-embedded: kustomize envsubst generate-manifests-dpuservice generate-manifests-provisioning generate-manifests-hostagent generate-manifests-release-defaults generate-manifests-kamaji-cluster-manager generate-manifests-static-cluster-manager generate-manifests-nodesriovdeviceplugin ## Generates manifests that are embedded into the operator binary.
 	# Reorder none here ensure that we generate the kustomize files in a specific order to be consumed by the DPF Operator.
 	$(KUSTOMIZE) build --reorder=none config/provisioning/default > $(EMBEDDED_MANIFESTS_DIR)/provisioning-controller.yaml
 	$(KUSTOMIZE) build --reorder=none config/dpu-detector > $(EMBEDDED_MANIFESTS_DIR)/dpu-detector.yaml
@@ -349,7 +353,10 @@ generate-manifests-provisioning: controller-gen kustomize ## Generate manifests 
 	$(MAKE) clean-generated-yaml SRC_DIRS="./config/provisioning/crd/bases"
 	$(CONTROLLER_GEN) \
 	paths="./cmd/provisioning/..." \
-	paths="./internal/provisioning/..." \
+	paths="./internal/provisioning/controllers/..." \
+	paths="./internal/provisioning/bfbregistry/..." \
+	paths="./internal/provisioning/webhooks/..." \
+	paths="./internal/provisioning/utils/..." \
 	paths="./api/provisioning/..." \
 	crd:crdVersions=v1,generateEmbeddedObjectMeta=true \
 	rbac:roleName=manager-role \
@@ -357,6 +364,15 @@ generate-manifests-provisioning: controller-gen kustomize ## Generate manifests 
 	output:rbac:dir=./config/provisioning/rbac \
 	output:webhook:dir=./config/provisioning/webhook \
 	webhook
+
+.PHONY: generate-manifests-hostagent
+generate-manifests-hostagent: controller-gen ## Generate RBAC for the hostagent.
+	@rm -rf /tmp/hostagent-rbac && mkdir -p /tmp/hostagent-rbac
+	$(CONTROLLER_GEN) \
+	paths="./internal/provisioning/hostagent/..." \
+	rbac:roleName=hostagent-role \
+	output:rbac:dir=/tmp/hostagent-rbac
+	mv /tmp/hostagent-rbac/role.yaml ./config/provisioning/rbac/hostagent_role.yaml
 
 .PHONY: generate-manifests-kamaji-cluster-manager
 generate-manifests-kamaji-cluster-manager: controller-gen kustomize ## Generate manifests e.g. CRD, RBAC. for the DPF provisioning controller.
@@ -516,7 +532,7 @@ test: envtest ## Run tests.
 
 .PHONY: test-report
 test-report: envtest gotestsum ## Run tests and generate a junit style report
-	set +o errexit; GOTOOLCHAIN=$(shell go version | awk '{print $$3}')+auto KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(TOOLSDIR) -p path)" go test -count 1 -race -json $(TESTPKGS) -coverprofile cover.out -coverpkg=$(COVERPKGS) > junit.stdout; echo $$? > junit.exitcode;
+	set +o errexit; GOTOOLCHAIN=$(GOTOOLCHAIN) KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(TOOLSDIR) -p path)" go test -count 1 -race -json $(TESTPKGS) -coverprofile cover.out -coverpkg=$(COVERPKGS) > junit.stdout; echo $$? > junit.exitcode;
 	$(GOTESTSUM) --junitfile junit.xml --raw-command cat junit.stdout
 	exit $$(cat junit.exitcode)
 
@@ -624,11 +640,11 @@ commit-check: conform ## Run conform to validate commit message
 GOLANGCI_LINT_GOGC ?= "100"
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint linter & yamllint
-	GOOS=linux GOGC=$(GOLANGCI_LINT_GOGC) $(GOLANGCI_LINT) run --timeout 5m
+	GOOS=linux GOTOOLCHAIN=$(GOTOOLCHAIN) GOGC=$(GOLANGCI_LINT_GOGC) $(GOLANGCI_LINT) run --timeout 5m
 
 .PHONY: lint-fix
 lint-fix: golangci-lint ## Run golangci-lint linter and perform fixes
-	GOOS=linux $(GOLANGCI_LINT) run --fix
+	GOOS=linux GOTOOLCHAIN=$(GOTOOLCHAIN) $(GOLANGCI_LINT) run --fix
 
 VERIFY_TARGETS ?= generate copyright md-links shfmt crdify manifests-all
 

@@ -46,22 +46,59 @@ metadata:
   labels:
     app.kubernetes.io/part-of: dpf-provisioning-controller-manager
     dpu.nvidia.com/component: dpf-provisioning-controller-manager
-  name: dpf-provisioning-hostagent-role
-  namespace: system
+  name: dpf-provisioning-dpu-agent-csr-creator
 rules:
 - apiGroups:
-  - provisioning.dpu.nvidia.com
+  - certificates.k8s.io
   resources:
-  - dpunodes
-  - dpudevices
+  - certificatesigningrequests
   verbs:
   - create
-  - delete
   - get
   - list
   - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/part-of: dpf-provisioning-controller-manager
+    dpu.nvidia.com/component: dpf-provisioning-controller-manager
+  name: dpf-provisioning-hostagent-role
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - nodes
+  - services
+  verbs:
+  - get
+  - list
   - patch
-  - update
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - secrets
+  verbs:
+  - get
+- apiGroups:
+  - certificates.k8s.io
+  resources:
+  - certificatesigningrequests
+  verbs:
+  - create
+  - get
+  - list
+  - watch
+- apiGroups:
+  - operator.dpu.nvidia.com
+  resources:
+  - dpfoperatorconfigs
+  verbs:
+  - get
+  - list
+  - watch
 - apiGroups:
   - provisioning.dpu.nvidia.com
   resources:
@@ -79,9 +116,22 @@ rules:
 - apiGroups:
   - provisioning.dpu.nvidia.com
   resources:
-  - dpus/status
-  - dpunodes/status
+  - dpudevices
+  - dpunodes
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - provisioning.dpu.nvidia.com
+  resources:
   - dpudevices/status
+  - dpunodes/status
+  - dpus/status
   verbs:
   - get
   - patch
@@ -90,39 +140,6 @@ rules:
   - provisioning.dpu.nvidia.com
   resources:
   - dpuflavors
-  verbs:
-  - get
-  - list
-  - watch
-- apiGroups:
-  - ""
-  resources:
-  - secrets
-  verbs:
-  - get
-- apiGroups:
-  - ""
-  resources:
-  - nodes
-  - services
-  verbs:
-  - get
-  - list
-  - patch
-  - watch
-- apiGroups:
-  - certificates.k8s.io
-  resources:
-  - certificatesigningrequests
-  verbs:
-  - create
-  - get
-  - list
-  - watch
-- apiGroups:
-  - operator.dpu.nvidia.com
-  resources:
-  - dpfoperatorconfigs
   verbs:
   - get
   - list
@@ -360,6 +377,16 @@ rules:
   - patch
   - update
   - watch
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - rolebindings
+  - roles
+  verbs:
+  - create
+  - delete
+  - get
+  - list
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -381,6 +408,22 @@ subjects:
 - apiGroup: rbac.authorization.k8s.io
   kind: Group
   name: dpf:host-agent
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  labels:
+    app.kubernetes.io/part-of: dpf-provisioning-controller-manager
+    dpu.nvidia.com/component: dpf-provisioning-controller-manager
+  name: dpf-provisioning-dpu-agent-bootstrap
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: dpf-provisioning-dpu-agent-csr-creator
+subjects:
+- apiGroup: rbac.authorization.k8s.io
+  kind: Group
+  name: system:bootstrappers:dpf:dpu-agent
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -414,36 +457,6 @@ subjects:
 - kind: ServiceAccount
   name: dpf-provisioning-controller-manager
   namespace: dpf-provisioning
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  labels:
-    app.kubernetes.io/part-of: dpf-provisioning-controller-manager
-    dpu.nvidia.com/component: dpf-provisioning-controller-manager
-  name: dpf-provisioning-dpuagent-zerotrust-role
-  namespace: dpf-provisioning
-rules:
-- apiGroups:
-  - provisioning.dpu.nvidia.com
-  resources:
-  - dpus
-  verbs:
-  - get
-- apiGroups:
-  - provisioning.dpu.nvidia.com
-  resources:
-  - dpus/status
-  verbs:
-  - get
-  - update
-  - patch
-- apiGroups:
-  - ""
-  resources:
-  - secrets
-  verbs:
-  - get
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -486,23 +499,6 @@ rules:
   verbs:
   - create
   - patch
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  labels:
-    app.kubernetes.io/part-of: dpf-provisioning-controller-manager
-    dpu.nvidia.com/component: dpf-provisioning-controller-manager
-  name: dpf-provisioning-dpuagent-zerotrust-rolebinding
-  namespace: dpf-provisioning
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: Role
-  name: dpf-provisioning-dpuagent-zerotrust-role
-subjects:
-- kind: ServiceAccount
-  name: dpf-provisioning-dpuagent-zerotrust
-  namespace: dpf-provisioning
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

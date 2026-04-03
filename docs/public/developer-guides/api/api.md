@@ -934,6 +934,7 @@ _Appears in:_
 | `dpuOpenvSwitchSystemSharedLib64Path` _string_ | DPUOpenvSwitchSystemSharedLib64Path is the path at which the system lib64 used by OVS components can be found on the DPU.<br />If this field is not set, no lib64 volume mount will be configured in the SFC Controller component.<br />This setting does not change where components are installed. Installation location fixed in the BFB. |  | MinLength: 1 <br />Optional: \{\} <br /> |
 | `kubernetesAPIServerVIP` _string_ | KubernetesAPIServerVIP is the VIP the Kubernetes API server is accessible at.<br />This setting enables specific underlying components deployed directly or indirectly by the DPF Operator to reach<br />the Kubernetes API Server when the ClusterIP Kubernetes Service is not functional.<br />If set, it should be set to an IP to ensure that components work even if DNS is not available in the cluster. |  | Optional: \{\} <br /> |
 | `kubernetesAPIServerPort` _integer_ | KubernetesAPIServerPort is the port the Kubernetes API server is accessible at.<br />This setting is usually used together with the kubernetesAPIServerVIP setting. It enables specific underlying<br />components deployed directly or indirectly by the DPF Operator to reach the Kubernetes API Server when the<br />ClusterIP Kubernetes Service is not functional. |  | Optional: \{\} <br /> |
+| `argoCDNamespace` _string_ | ArgoCDNamespace is the namespace where ArgoCD is deployed.<br />AppProjects and cluster secrets required by DPF will be created in this namespace.<br />Defaults to the namespace of the DPFOperatorConfig. |  | MaxLength: 63 <br />MinLength: 1 <br />Optional: \{\} <br /> |
 
 
 #### ProvisioningControllerConfiguration
@@ -1408,6 +1409,22 @@ _Appears in:_
 | `Error` | Error happens during BlueFieldSoftware downloading<br /> |
 
 
+#### BlueFieldSoftwareReference
+
+
+
+BlueFieldSoftwareReference is a reference to a specific BlueFieldSoftware
+
+
+
+_Appears in:_
+- [DPUTemplateSpec](#dputemplatespec)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `name` _string_ | Specifies name of the BlueFieldSoftware CR to use for this DPU |  | MinLength: 1 <br /> |
+
+
 #### BlueFieldSoftwareStatus
 
 
@@ -1833,6 +1850,7 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
+| `observedGeneration` _integer_ | ObservedGeneration is the generation of the spec that was last applied by a successful scan.<br />When spec (e.g. IP range) changes, reconciliation runs a scan immediately instead of waiting for the next interval. |  | Optional: \{\} <br /> |
 | `lastScanTime` _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#time-v1-meta)_ | LastScanTime is the timestamp of the last successful scan |  |  |
 | `foundDPUs` _integer_ | FoundDPUs is the list of discovered DPU BMC IPs |  |  |
 
@@ -1964,6 +1982,7 @@ _Appears in:_
 | `systemReservedResources` _[ResourceList](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#resourcelist-v1-core)_ | SystemReservedResources indicates the resources that are consumed by the system (OS, OVS, DPF system etc) and are<br />not made available for DPUServices to consume. DPUServices can consume the difference between DPUResources and<br />SystemReservedResources. This field must not be specified if dpuResources are not specified. |  | Optional: \{\} <br /> |
 | `dpuMode` _[DpuModeType](#dpumodetype)_ | Specifies the DPU Mode type: one of dpu,zero-trust.<br />When not specified, defaults to "zero-trust" if the DPF deployment uses Redfish install interface,<br />otherwise defaults to "dpu". |  | Enum: [dpu zero-trust nic] <br />Optional: \{\} <br /> |
 | `hostNetworkInterfaceConfigs` _[NetworkInterfaceConfig](#networkinterfaceconfig) array_ | HostNetworkInterfaceConfigs contains the configuration for the host-side network interfaces. |  | Optional: \{\} <br /> |
+| `ewNicConfigurations` _[NicConfiguration](#nicconfiguration)_ | EWNicConfigurations contains the configuration for the E/W NICs. |  | Optional: \{\} <br /> |
 
 
 
@@ -2383,6 +2402,7 @@ _Appears in:_
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `bfb` _[BFBReference](#bfbreference)_ | Specifies a BFB CR |  |  |
+| `blueFieldSoftware` _[BlueFieldSoftwareReference](#bluefieldsoftwarereference)_ | Specifies a BlueFieldSoftware CR |  | Optional: \{\} <br /> |
 | `nodeEffect` _[NodeEffect](#nodeeffect)_ | Specifies how changes to the DPU should affect the Node | \{ drain:true \} | Optional: \{\} <br /> |
 | `cluster` _[ClusterSpec](#clusterspec)_ | Specifies details on the K8S cluster to join |  | Optional: \{\} <br /> |
 | `dpuFlavor` _string_ | DPUFlavor is the name of the DPUFlavor that will be used to deploy the DPU. |  | MinLength: 1 <br />Required: \{\} <br /> |
@@ -2618,6 +2638,25 @@ _Appears in:_
 | `dhcp` _boolean_ | DHCP is the DHCP configuration for the network interface. |  | Optional: \{\} <br /> |
 | `portNumber` _integer_ | PortNumber identifies which port this configuration applies to. |  | Maximum: 1 <br />Minimum: 0 <br />Required: \{\} <br /> |
 | `nvconfig` _[NVConfig](#nvconfig)_ | NVConfig contains port-specific configuration for this network interface.<br />This configuration is applied in addition to the global NVConfig settings in DPUFlavorSpec.<br />Both global and per-interface NVConfig settings can coexist without collision. |  | Optional: \{\} <br /> |
+
+
+#### NicConfiguration
+
+
+
+NicConfiguration is a set of configurations for the NICs
+
+
+
+_Appears in:_
+- [DPUFlavorSpec](#dpuflavorspec)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `numVfs` _integer_ | Number of VFs to be configured |  | Required: \{\} <br /> |
+| `linkType` _[LinkTypeEnum](#linktypeenum)_ | LinkType to be configured, Ethernet\|Infiniband |  | Enum: [Ethernet Infiniband] <br />Required: \{\} <br /> |
+| `spectrumXOptimized` _[SpectrumXOptimizedSpec](#spectrumxoptimizedspec)_ | Spectrum-X optimization settings. Works only with linkType==Ethernet && numVfs==0. Other optimizations must be skipped or disabled. RawNvConfig must be empty. |  |  |
+| `rawNvConfig` _NvConfigParam array_ | List of arbitrary nv config parameters |  |  |
 
 
 #### NodeEffect
