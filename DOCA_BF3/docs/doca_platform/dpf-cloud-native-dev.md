@@ -264,3 +264,277 @@ spec:
 - **하드웨어 즉시 테스트** — 빌드 환경 = 실행 환경
 - **SSH 불필요** — 전체 플로우 `kubectl`로만 수행
 - **GitOps 통합** — 코드 변경 → 자동 배포 파이프라인 가능
+
+---
+
+## 테스트 시나리오
+
+DPF Operator Running 이후 BF3 DPU 온보딩 → DPU 클러스터 → DPUService 배포까지의 검증 순서.
+
+DPF가 DPU를 관리하는 원리:
+
+```
+[사용자]
+  kubectl apply -f dpuset.yaml
+        ↓
+[Host Cluster — dpf-operator]
+  DPUSet 감지 → 매칭 노드(tempnode-bf3) 찾기
+        ↓
+[Host Agent — tempnode-bf3에 DaemonSet]
+  BFB 이미지 다운로드 → BF3 DPU에 플래시
+        ↓
+[BF3 DPU 재부팅]
+  새 OS로 부팅 → Host Cluster API에 조인 시도
+        ↓
+[Kamaji — Host Cluster Pod]
+  TenantControlPlane CR 자동 생성
+  → DPU 전용 kube-apiserver + etcd Pod 생성
+  → DPU kubeconfig Secret 자동 생성
+        ↓
+[DPU Cluster (arm64)]
+  BF3가 Kamaji API에 worker로 등록 → Node Ready
+        ↓
+[DPUService 배포]
+  dpf-operator가 DPU 클러스터에 DPUService Helm 차트 배포
+  → arm64 Pod 실행
+```
+
+핵심: **모든 과정이 kubectl apply 하나로 자동화** — SSH/수동 개입 없음
+
+---
+
+### 테스트 1: DPUSet 생성 → BF3 온보딩
+
+**사전 조건 확인**
+
+```bash
+# tempnode-bf3가 dpu-enabled 레이블 보유 여부
+kubectl get node tempnode-bf3 \
+  -o jsonpath='{.metadata.labels.feature\.node\.kubernetes\.io/dpu-enabled}'
+# → "true"
+
+# SR-IOV capable 확인
+kubectl get node tempnode-bf3 \
+  -o jsonpath='{.metadata.labels.feature\.node\.kubernetes\.io/network-sriov\.capable}'
+# → "true"
+```
+
+**DPUSet 예시**
+
+```yaml
+apiVersion: provisioning.dpu.nvidia.com/v1alpha1
+kind: DPUSet
+metadata:
+  name: bf3-pool
+  namespace: dpf-operator-system
+spec:
+  nodeSelector:
+    matchLabels:
+      feature.node.kubernetes.io/dpu-enabled: "true"
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+  dpuTemplate:
+    spec:
+      bfb:
+        name: doca-3.2
+      dpuFlavor: base
+```
+
+**검증**
+
+```bash
+# DPU 온보딩 상태
+kubectl get dpu -n dpf-operator-system -w
+
+# Kamaji가 생성한 DPU 클러스터
+kubectl get tenantcontrolplane -n dpf-operator-system
+
+# DPU kubeconfig Secret 자동 생성 확인
+kubectl get secret -n dpf-operator-system | grep kubeconfig
+
+# DPUCluster 상태
+kubectl get dpucluster -A
+```
+
+예상 소요 시간:
+- BFB 다운로드 + 플래시: **10~30분**
+- DPU 재부팅 + 조인: **5~10분**
+
+---
+
+### 테스트 2: DPU 클러스터 접근 확인
+
+Kamaji가 DPU 전용 kube-apiserver를 Host Cluster Pod으로 실행. kubeconfig Secret에서 접속 정보 추출.
+
+**kubeconfig 추출**
+
+```bash
+# Secret 이름 확인
+kubectl get secret -n dpf-operator-system | grep kubeconfig
+
+# kubeconfig 파일로 저장
+kubectl get secret <kubeconfig-secret-name> \
+  -n dpf-operator-system \
+  -o jsonpath='{.data.admin\.conf}' | base64 -d > /tmp/dpu-kubeconfig
+```
+
+**검증**
+
+```bash
+# DPU 클러스터 노드 확인 (arm64 BF3)
+kubectl --kubeconfig=/tmp/dpu-kubeconfig get nodes
+# 예상: bluefield-3   Ready   <none>   5m   v1.x.x
+
+# 아키텍처 확인
+kubectl --kubeconfig=/tmp/dpu-kubeconfig get node bluefield-3 \
+  -o jsonpath='{.status.nodeInfo.architecture}'
+# → "arm64"
+
+# 시스템 Pod 확인
+kubectl --kubeconfig=/tmp/dpu-kubeconfig get pods -A
+```
+
+---
+
+### 테스트 3: 최소 DPUService 배포
+
+`DPUService` — Host Cluster에서 선언하면 DPF Operator가 DPU 클러스터에 Helm 차트 배포. DPU 클러스터(arm64)에서 실제 Pod 실행.
+
+**검증용 최소 DPUService**
+
+```yaml
+apiVersion: svc.dpu.nvidia.com/v1alpha1
+kind: DPUService
+metadata:
+  name: test-service
+  namespace: dpf-operator-system
+spec:
+  helmChart:
+    source:
+      repoURL: https://charts.bitnami.com/bitnami
+      chart: nginx
+      version: "15.x.x"
+    values:
+      replicaCount: 1
+```
+
+**검증**
+
+```bash
+# Host 클러스터에서 DPUService 상태
+kubectl get dpuservice -n dpf-operator-system
+
+# DPU 클러스터에서 실제 Pod 확인
+kubectl --kubeconfig=/tmp/dpu-kubeconfig get pods -A
+```
+
+---
+
+### 테스트 4: doca-dev 개발 환경 DPUService
+
+DOCA SDK arm64 컨테이너를 DPU 클러스터에 배포. 개발자가 DPU 위에서 네이티브 arm64 빌드 수행.
+
+**사전 확인**
+
+```bash
+# DPU 클러스터에서 StorageClass 확인
+kubectl --kubeconfig=/tmp/dpu-kubeconfig get sc
+
+# DPU 클러스터에서 PVC 생성 가능 여부
+kubectl --kubeconfig=/tmp/dpu-kubeconfig get pvc -A
+```
+
+**검증 시나리오**
+
+```bash
+# DPU Pod에서 arm64 확인
+kubectl --kubeconfig=/tmp/dpu-kubeconfig exec -it doca-dev -c dev -- \
+  uname -m
+# → aarch64
+
+# DOCA SDK 라이브러리 확인
+kubectl --kubeconfig=/tmp/dpu-kubeconfig exec -it doca-dev -c dev -- \
+  ls /opt/mellanox/doca/
+
+# 간단한 DOCA 앱 컴파일 테스트
+kubectl --kubeconfig=/tmp/dpu-kubeconfig exec -it doca-dev -c dev -- \
+  gcc -o /tmp/hello /tmp/hello.c
+```
+
+---
+
+### 테스트 5: SR-IOV VF 활성화 확인
+
+DPUFlavor의 `nvConfig`가 BF3 mlxconfig 값을 선언적으로 설정. DPF Operator가 온보딩 시 `mlxconfig` 명령 자동 실행.
+
+**현재 상태 확인**
+
+```bash
+ssh joon@10.34.20.4 "cat /sys/class/net/enp175s0f0np0/device/sriov_numvfs"
+# 현재: 0
+
+ssh joon@10.34.20.4 "cat /sys/class/net/enp175s0f0np0/device/sriov_totalvfs"
+# 가용: 16
+```
+
+**DPUFlavor nvConfig 설정**
+
+```yaml
+nvconfig:
+  - device: "*"
+    parameters:
+      - "NUM_OF_VFS=8"
+      - "SRIOV_EN=1"
+      - "PF_TOTAL_SF=20"
+```
+
+**검증**
+
+```bash
+# DPU 온보딩 후 VF 생성 확인
+ssh joon@10.34.20.4 "cat /sys/class/net/enp175s0f0np0/device/sriov_numvfs"
+# → 8
+
+# DPU 클러스터에서 bf_sf 리소스 확인
+kubectl --kubeconfig=/tmp/dpu-kubeconfig get node bluefield-3 \
+  -o jsonpath='{.status.allocatable}' | python3 -m json.tool | grep bf_sf
+
+# VF 할당 Pod 예시
+kubectl --kubeconfig=/tmp/dpu-kubeconfig apply -f - <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: vf-test
+spec:
+  containers:
+  - name: test
+    image: ubuntu:22.04
+    resources:
+      limits:
+        nvidia.com/bf_sf: "1"
+EOF
+```
+
+---
+
+### 테스트 순서 요약
+
+```
+1. BFB CR 생성 (URL 확인 후)
+         ↓
+2. DPUFlavor CR 생성 (nvConfig 포함)
+         ↓
+3. DPUSet 생성 → BF3 온보딩 대기 (10~30분)
+         ↓
+4. kubectl get dpu, get tenantcontrolplane 확인
+         ↓
+5. DPU kubeconfig 추출 → arm64 node Ready 확인
+         ↓
+6. 최소 DPUService(nginx) 배포 → DPU Pod 실행 확인
+         ↓
+7. doca-dev DPUService 배포 → DOCA SDK 빌드 테스트
+         ↓
+8. SR-IOV VF 생성 확인 → bf_sf 리소스 할당 테스트
+```

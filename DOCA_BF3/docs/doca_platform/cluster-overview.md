@@ -1,12 +1,90 @@
 ---
-title: "레포지토리 구조"
+title: "클러스터 현황 및 레포 구조"
 ---
 
 [TOC]
 
+## 클러스터 노드 구성
+
+| 노드 | IP | 역할 | OS | Kubernetes |
+|------|----|------|-----|-----------|
+| node4 | 10.34.20.3 | control-plane | Ubuntu 24.04.2 | v1.34.3 |
+| sandbox-1 | 10.34.20.5 | worker | Ubuntu 24.04.2 | v1.34.3 |
+| sandbox-2 | 10.34.20.6 | worker | Ubuntu 24.04.2 | v1.34.3 |
+| sandbox-3 | 10.34.20.7 | worker | Ubuntu 24.04.2 | v1.34.3 |
+| sandbox-4 | 10.34.20.8 | worker | Ubuntu 24.04.2 | v1.34.3 |
+| tempnode-bf3 | 10.34.20.4 | worker + BF3 DPU | Ubuntu 24.04.2 | v1.34.3 |
+
+- CNI: Cilium (전 노드)
+- CRI: containerd 2.1.6
+- tempnode-bf3 Taint: `gpu=dedicated:NoSchedule`, `doca=dedicated:NoSchedule`
+
+---
+
+### tempnode-bf3 호스트 측 상세
+
+| 항목 | 값 |
+|------|-----|
+| BF3 PCI | `af:00.0`, `af:00.1` (ConnectX-7), `af:00.2` (SoC Mgmt) |
+| PF0 인터페이스 | `enp175s0f0np0` — IP `10.34.20.4/12`, MTU 9000 |
+| PF1 인터페이스 | `enp175s0f1np1` — IP `10.50.0.10/24` |
+| rshim (tmfifo) | `tmfifo_net0` — `192.168.101.1/24` |
+| SR-IOV totalvfs | PF0: 16 / PF1: 16 (enp175), enp61: 32 |
+| SR-IOV numvfs | **0** (VF 미생성) |
+| GPU | NVIDIA TITAN V × 2 (CUDA 12.8, driver 570) |
+
+### BF3 DPU 측 (192.168.101.2)
+
+접속: `ssh joon@10.34.20.4` → `ssh ubuntu@192.168.101.2`
+
+| 항목 | 값 |
+|------|-----|
+| 호스트명 | `bluefield-3` |
+| OS | Ubuntu 24.04.3 LTS |
+| 커널 | `6.8.0-1012-bluefield-64k` |
+| OOB IP | `oob_net0: 10.34.20.200/12` |
+| DOCA 버전 | 3.2.0118 |
+| OVS | `p0`, `p1`, `pf0hpf`, `pf1hpf`, `en3f0pf0sf0`, `en3f1pf1sf0`, `ovsbr1`, `ovsbr2` |
+| Docker/containerd | ✅ 설치됨 |
+| kubectl | ❌ 미설치 |
+| 실행중 DOCA 서비스 | `mlx_ipmid.service` (IPMI daemon) |
+
+---
+
+## 기존 설치 컴포넌트
+
+### DPF 사전 조건 현황
+
+| 컴포넌트 | 상태 | 비고 |
+|---------|------|------|
+| ArgoCD | ✅ 실행중 | `argocd` 네임스페이스, 전 Pod Running |
+| Cilium | ✅ 실행중 | 전 노드 CNI |
+| NFD | ✅ 레이블 부착됨 | `feature.node.kubernetes.io/*` 존재 |
+| Multus | ✅ CRD 존재 | `network-attachment-definitions.k8s.cni.cncf.io` |
+| cert-manager | ❌ 미설치 | 네임스페이스만 존재, Pod 없음 |
+| Kamaji | ❌ 미설치 | |
+| maintenance-operator | ❌ 미설치 | |
+| DPF Operator | ❌ 미설치 | DPF CRD 전무 |
+| local-path-provisioner | 미확인 | |
+
+### 주요 기설치 구성요소
+
+- **Rook-Ceph** — 분산 스토리지 (sandbox-1, 2, 4, tempnode-bf3 OSD)
+- **GPU Operator** — tempnode-bf3 GPU 관리
+- **Harbor** — 컨테이너 레지스트리
+- **Keycloak** — 인증
+- **Prometheus** — 모니터링
+- **PostgreSQL (CNPG)** — DB
+
+> 주의: ArgoCD, NFD 기설치 — `prereqs.yaml` 전체 적용 금지. 필요한 릴리스만 `--selector`로 선택 설치
+
+---
+
+## 레포지토리 구조
+
 `doca-platform` 레포 디렉토리 구조 및 아키텍처 컴포넌트 매핑
 
-## 최상위 구조
+### 최상위 구조
 
 ```
 doca-platform/
@@ -25,7 +103,7 @@ doca-platform/
 
 ---
 
-## `api/` — CRD API 정의
+### `api/` — CRD API 정의
 
 Kubernetes API 서버 등록 커스텀 리소스의 Go 타입 정의. 하위 디렉토리 = 별도 API 그룹
 
@@ -42,7 +120,7 @@ Kubernetes API 서버 등록 커스텀 리소스의 Go 타입 정의. 하위 디
 
 ---
 
-## `cmd/` — 서비스 진입점
+### `cmd/` — 서비스 진입점
 
 하위 디렉토리마다 배포 가능한 바이너리 `main.go` 1개
 
@@ -65,9 +143,9 @@ Kubernetes API 서버 등록 커스텀 리소스의 Go 타입 정의. 하위 디
 
 ---
 
-## `config/` — Kustomize 매니페스트
+### `config/` — Kustomize 매니페스트
 
-컴포넌트별 Kubernetes 배포 매니페스트. 각 하위 디렉토리 → Kubebuilder 표준 레이아웃 (`default/`, `manager/`, `rbac/`, `webhook/`, `certmanager/`)
+컴포넌트별 Kubernetes 배포 매니페스트. 각 하위 디렉토리 → Kubebuilder 표준 레이아웃
 
 | 컴포넌트 | 경로 | 배포 대상 |
 |---------|------|----------|
@@ -82,9 +160,7 @@ Kubernetes API 서버 등록 커스텀 리소스의 Go 타입 정의. 하위 디
 
 ---
 
-## `deploy/` — Helm & Helmfile
-
-프로덕션 배포 구성.
+### `deploy/` — Helm & Helmfile
 
 ```
 deploy/
@@ -92,7 +168,7 @@ deploy/
 │   ├── dpf-operator/       # 전체 DPF 스택을 위한 umbrella Helm 차트
 │   └── dpu-networking/     # 네트워킹 서브차트 (SR-IOV, SFC, OVS-CNI)
 └── helmfiles/
-    ├── prereqs.yaml        # 기반 의존성 (아래 참조)
+    ├── prereqs.yaml        # 기반 의존성
     └── values/             # 릴리스별 Helm 값 오버라이드
 ```
 
@@ -109,9 +185,7 @@ deploy/
 
 ---
 
-## `dpuservices/` — DPU 서비스 매니페스트
-
-각 DOCA 서비스용 즉시 사용 가능한 `DPUService` / `DPUDeployment` 매니페스트. 호스트 클러스터 적용 시 DPF → ArgoCD → DPU 클러스터 자동 동기화
+### `dpuservices/` — DPU 서비스 매니페스트
 
 | 서비스 | 경로 | 설명 |
 |--------|------|------|
@@ -124,81 +198,43 @@ deploy/
 
 ---
 
-## `hack/` — 빌드 및 개발 도구
-
-```
-hack/
-├── scripts/
-│   ├── dpu-control-plane-setup.sh   # BF3 DPU 모드 전환 (DPU mode ↔ NIC mode, mlxconfig + IPMI)
-│   ├── kind-install.sh              # MetalLB 포함 로컬 KinD 클러스터 생성
-│   ├── deploy-helmfile.sh           # Helmfile 배포 래퍼 (로컬, OCI, Helm 레포 지원)
-│   ├── docker-build.sh              # docker buildx 래퍼 (구조화된 JSON 로그 포함)
-│   ├── log-collector.sh             # 클러스터/Pod 로그 수집 (디버깅용)
-│   └── crd-validation.sh            # CRD 스키마 유효성 검사
-└── tools/                           # 고정된 도구 버전 (controller-gen, mockgen 등)
-```
-
----
-
-## `internal/` — 컨트롤러 구현체
-
-핵심 비즈니스 로직. 외부 Go 모듈 import 불가
+### `internal/` — 컨트롤러 구현체
 
 | 패키지 | 경로 | 책임 |
 |--------|------|------|
 | Provisioning 컨트롤러 | `internal/provisioning/controllers/` | DPU, DPUSet, DPUCluster, BFB, DPUNodeMaintenance 리콘실러 |
 | DPU agent | `internal/provisioning/dpuagent/` | DPU 위 에이전트 로직 (arm64) |
-| DPU service 컨트롤러 | `internal/dpuservice/controllers/` | DPUService, DPUDeployment, DPUServiceCredentialRequest 리콘실러 |
+| DPU service 컨트롤러 | `internal/dpuservice/controllers/` | DPUService, DPUDeployment 리콘실러 |
 | Service chain | `internal/dpuservicechain/` | DPUServiceChain, DPUServiceInterface, DPUServiceIPAM 리콘실러 |
 | SFC 컨트롤러 | `internal/sfccontroller/` | 서비스 함수 체인용 OVS 플로우 프로그래밍 |
 | SNAP storage | `internal/storage/snap/` | SNAP 호스트 컨트롤러 및 노드 드라이버 |
-| Cluster manager (static) | `internal/clustermanager/static/` | 정적 DPU 클러스터 관리 |
 | Cluster manager (Kamaji) | `internal/clustermanager/kamaji/` | Kamaji 기반 DPU 클러스터 관리 |
-| Pod IPAM injector | `internal/pod-ipam-injector/` | IPAM 어노테이션 주입 어드미션 웹훅 |
 | Operator | `internal/operator/` | DPFOperatorConfig 리콘실러 — 전체 서브시스템 부트스트랩 |
-| SR-IOV device plugin | `internal/nodesriovdeviceplugin/` | VF 할당 및 라이프사이클 관리 |
 
 ---
 
-## `pkg/` — 공유 라이브러리
-
-여러 컨트롤러/바이너리 공통 패키지
+### `pkg/` — 공유 라이브러리
 
 | 패키지 | 경로 | 목적 |
 |--------|------|------|
 | `bfcfg` | `pkg/bfcfg/` | BlueField 하드웨어 구성 유틸리티 |
 | `conditions` | `pkg/conditions/` | `metav1.Condition` 표준 헬퍼 |
 | `dpucluster` | `pkg/dpucluster/` | DPU 클러스터 클라이언트 추상화 |
-| `dpuselector` | `pkg/dpuselector/` | DPU 노드 셀렉션 / 레이블 매칭 |
 | `ipallocator` | `pkg/ipallocator/` | DPU 서비스용 IP 범위 할당 |
 | `openflow` | `pkg/openflow/` | OpenFlow 메시지 구성 |
 | `ovsmodel` / `ovsutils` | `pkg/ovsmodel/`, `pkg/ovsutils/` | OVS OVSDB 모델 및 쿼리 유틸리티 |
 | `vfmac` | `pkg/vfmac/` | Virtual Function MAC 주소 관리 |
-| `health` | `pkg/health/` | Kubernetes 헬스체크 헬퍼 |
 | `utils` | `pkg/utils/` | 범용 유틸리티 |
 
 ---
 
-## `test/` — 테스트 인프라
-
-| 디렉토리 | 목적 |
-|----------|------|
-| `test/e2e/` | End-to-end 테스트 (실행 중인 클러스터 필요) |
-| `test/apivalidation/` | CRD 스키마 유효성 검사 테스트 |
-| `test/mock/` | mockgen으로 생성된 mock 구현체 |
-| `test/objects/` | 단위 테스트용 오브젝트 팩토리 |
-| `test/utils/` | 공유 테스트 헬퍼 |
-
----
-
-## 주요 빌드 변수 (Makefile)
+### 주요 빌드 변수 (Makefile)
 
 | 변수 | 기본값 | 설명 |
 |------|--------|------|
 | `REGISTRY` | `example.com` | 컨테이너 이미지 레지스트리 |
 | `TAG` | `v0.1.0` | 이미지 태그 |
 | `ARCH` | `amd64` | 빌드 대상 아키텍처 (`amd64` 또는 `arm64`) |
-| `HOST_ARCH` | `amd64` | 호스트 측 이미지 아키텍처 |
 | `DPU_ARCH` | `arm64` | DPU 측 이미지 아키텍처 |
 
 DPU 측(arm64) 이미지 빌드:
