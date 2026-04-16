@@ -1,0 +1,31 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: doca-dev
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: doca-dev
+spec:
+  selector:
+    matchLabels:
+      app: doca-dev
+  template:
+    metadata:
+      labels:
+        app: doca-dev
+    spec:
+      containers:
+        - name: dev
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["sleep", "infinity"]
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - name: doca-devel
+              mountPath: {{ .Values.nfs.mountPath }}
+      volumes:
+        - name: doca-devel
+          nfs:
+            server: {{ .Values.nfs.server }}
+            path: {{ .Values.nfs.path }}

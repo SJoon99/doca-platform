@@ -1,0 +1,17 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: doca-dev
+---
+apiVersion: svc.dpu.nvidia.com/v1alpha1
+kind: DPUService
+metadata:
+  name: doca-dev
+  namespace: doca-dev
+spec:
+  helmChart:
+    source:
+      repoURL: oci://10.34.25.12:80/doca
+      chart: doca-dev
+      version: "0.1.0"

@@ -1,0 +1,9 @@
+image:
+  repository: nvcr.io/nvidia/doca/doca
+  tag: 3.2.2-devel
+  pullPolicy: IfNotPresent
+
+nfs:
+  server: 10.34.20.4
+  path: /home/joon/doca-platform/DOCA_BF3/projects
+  mountPath: /doca_devel

@@ -4,6 +4,46 @@ title: "DPF 네트워크 아키텍처"
 
 [TOC]
 
+## br-dpu vs br-comm-ch 설계 의도
+
+### 한 쌍의 관리 채널
+
+`br-dpu` (host)와 `br-comm-ch` (DPU)는 PCIe VF pair로 연결된 **host↔DPU 관리 사이드밴드**입니다.
+
+```text
+tempnode-bf3 (host)                    BF3 DPU
+──────────────────                     ────────────────
+br-dpu (10.34.20.4)                    br-comm-ch (10.34.20.99)
+  │                                      │
+  enp175s0f0v0 ──── PCIe VF pair ──── pf0vf0
+```
+
+### 각 브릿지 역할
+
+| 브릿지 | 위치 | IP | DPF 설계 의도 |
+|--------|------|-----|--------------|
+| `br-dpu` | host (tempnode-bf3) | 10.34.20.4/12 | host K8s 네트워크 + DPF provisioning 진입점 (hostagent/dms/rshim) |
+| `br-comm-ch` | BF3 DPU 내부 | 10.34.20.99/12 | DPU가 host 네트워크에 보이는 IP — kubelet join + dpu-agent 통신 |
+
+- **br-dpu**: host가 DPU를 "보는" 창구. DPF provisioning 트래픽이 이 브릿지를 통해 DPU로 전달됨
+- **br-comm-ch**: DPU가 host 네트워크에 참여하는 IP. kubelet이 이 주소로 tenant DPU cluster에 join
+
+### 데이터 플레인과의 구분
+
+```text
+관리 경로 (Management)
+  br-dpu ← PCIe VF pair → br-comm-ch
+  → DPF provisioning, K8s kubelet, dpu-agent
+
+데이터 경로 (Data Plane)
+  enp175s0f0np0 (100G PF) → PF0/PF1 → VF/SF
+  → DOCA 앱 실제 패킷, 고속 네트워크
+```
+
+DOCA 애플리케이션의 실제 트래픽은 이 관리 채널을 거치지 않음.
+
+---
+
 ## 현재 채택 구조
 
 ### 결론 요약
