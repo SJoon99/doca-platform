@@ -68,4 +68,7 @@ build/
 CLAUDE.md
 .omc/
 .omx/
-DOCA_BF3/docs/doca_platform/fully-*
+
+# DOCA_BF3 docs — exclude bulky external references and runtime state
+DOCA_BF3/docs/official_docs/
+DOCA_BF3/docs/**/*.pdf
