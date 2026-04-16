@@ -137,6 +137,14 @@ const (
 	// AgentCondRebootMethodDiscovery is set True when the device-query reboot path is active.
 	// Reason is the resolved RebootMethodType (e.g. SystemLevelReset, NoAction); Message holds mlxfwreset JSON when reset is needed.
 	AgentCondRebootMethodDiscovery = "RebootMethodDiscovery"
+	// AgentAnnotationAllowFirmwareResetReboot is the DPU annotation key used to allow RebootMethodFirmwareReset from mlxfwreset.
+	AgentAnnotationAllowFirmwareResetReboot = DPUProvisioningPrefix + "allow-firmware-reset-reboot"
+
+	// Script-reboot condition reasons set by the DPUNode controller on DPUCondRebooted.
+	// These are used by the DPUNode controller to detect an existing script-reboot lifecycle.
+	ReasonRebootScriptWaiting          = "RebootScriptWaiting"
+	ReasonRebootScriptFailedToFetchJob = "RebootScriptFailedToFetchJob"
+	ReasonRebootScriptFailed           = "RebootScriptFailed"
 )
 
 var (
@@ -154,7 +162,9 @@ func GenerateBFBCFGFilePath(filename string) string {
 }
 
 func GenerateBFBTaskName(bfb provisioningv1.BFB) string {
-	return fmt.Sprintf("%s-%s", bfb.Namespace, bfb.Name)
+	// Include UID to avoid task collisions when a BFB is deleted and re-created
+	// with the same namespace/name but different spec (e.g. updated URL).
+	return fmt.Sprintf("%s-%s-%s", bfb.Namespace, bfb.Name, bfb.UID)
 }
 
 func GenerateBFBFilePath(filename string) string {
@@ -581,11 +591,7 @@ func MarshalJSON(obj interface{}) (string, error) {
 	return string(json), nil
 }
 
-func GenerateDPUNodeMaintenanceObjectName(dpuNodeName string, nodeEffect *provisioningv1.NodeEffect) (string, error) {
-	if nodeEffect == nil {
-		return "", fmt.Errorf("nodeEffect is nil")
-	}
-
+func GenerateDPUNodeMaintenanceObjectName(dpuNodeName string, nodeEffect provisioningv1.NodeEffect) (string, error) {
 	switch {
 	case nodeEffect.IsCustomAction():
 		return fmt.Sprintf("%s-custom-action-%s", dpuNodeName, *nodeEffect.CustomAction), nil

@@ -85,6 +85,7 @@ type TestDomain struct {
 	MultiDPUCluster      string // Multi DPUCluster setup tests
 	ZeroTrust            string // Zero Trust mode in DPFOperatorConfig on the BeforeSuite stage
 	Observability        string // Observability test suite
+	ImagePullSecretsSync string // ImagePullSecrets sync/cleanup validation (opt out in CI via !ImagePullSecretsSync)
 }
 
 // Domain is the global instance of test label domains
@@ -106,6 +107,7 @@ var Domain = TestDomain{
 	MultiDPUCluster:      "MultiDPUCluster",
 	ZeroTrust:            "ZeroTrust",
 	Observability:        "Observability",
+	ImagePullSecretsSync: "ImagePullSecretsSync",
 }
 
 var (
@@ -135,6 +137,9 @@ var (
 	// dpuClusterInterface can be used to override the interface specified in DPUCluster YAML files.
 	// This is useful when running e2e tests on different hardware setups where the interface name differs.
 	dpuClusterInterface = ""
+	// prereqsNamespace can be used to override the namespace where the prerequisites are deployed.
+	// This is useful to test scenarios where the prerequisites are deployed in a different namespace than the known default.
+	prereqsNamespace = ""
 	// Labels and resources targeted for cleanup before running our e2e tests.
 	// This cleanup is typically handled by cleanupObjs, but if an e2e test fails, the standard cleanup may not be executed.
 	// Note: order matters as some object deletion depends on controllers that may be deployed via dpuservices/dpudeployments

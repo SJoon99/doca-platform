@@ -28,6 +28,7 @@ import (
 	"github.com/nvidia/doca-platform/internal/release"
 	"github.com/nvidia/doca-platform/pkg/dpucluster"
 
+	"github.com/google/go-cmp/cmp/cmpopts"
 	. "github.com/onsi/gomega"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -227,6 +228,11 @@ spec:
 										},
 										"serviceAccount": map[string]interface{}{
 											"name": "servicechainset-controller-73923044a5",
+											"labels": map[string]interface{}{
+												dpuservicev1.CredentialRequestNameLabelKey:                "servicesetcontroller-73923044a5",
+												dpuservicev1.CredentialRequestNamespaceLabelKey:           "test-namespace",
+												dpuservicev1.DPUServiceCredentialRequestManagedByLabelKey: dpuservicev1.DPUServiceCredentialRequestManagedByLabelValue,
+											},
 										},
 										"deployHostManifests": true,
 										"enabled":             true,
@@ -479,6 +485,11 @@ spec:
 										},
 										"serviceAccount": map[string]interface{}{
 											"name": "servicechainset-controller-73923044a5",
+											"labels": map[string]interface{}{
+												dpuservicev1.CredentialRequestNameLabelKey:                "servicesetcontroller-73923044a5",
+												dpuservicev1.CredentialRequestNamespaceLabelKey:           "test-namespace",
+												dpuservicev1.DPUServiceCredentialRequestManagedByLabelKey: dpuservicev1.DPUServiceCredentialRequestManagedByLabelValue,
+											},
 										},
 										"deployHostManifests": true,
 										"enabled":             true,
@@ -585,6 +596,11 @@ spec:
 										},
 										"serviceAccount": map[string]interface{}{
 											"name": "servicechainset-controller-1bdc412401",
+											"labels": map[string]interface{}{
+												dpuservicev1.CredentialRequestNameLabelKey:                "servicesetcontroller-1bdc412401",
+												dpuservicev1.CredentialRequestNamespaceLabelKey:           "test-namespace",
+												dpuservicev1.DPUServiceCredentialRequestManagedByLabelKey: dpuservicev1.DPUServiceCredentialRequestManagedByLabelValue,
+											},
 										},
 										"deployHostManifests": true,
 										"enabled":             true,
@@ -865,6 +881,11 @@ spec:
 										},
 										"serviceAccount": map[string]interface{}{
 											"name": "servicechainset-controller-73923044a5",
+											"labels": map[string]interface{}{
+												dpuservicev1.CredentialRequestNameLabelKey:                "servicesetcontroller-73923044a5",
+												dpuservicev1.CredentialRequestNamespaceLabelKey:           "test-namespace",
+												dpuservicev1.DPUServiceCredentialRequestManagedByLabelKey: dpuservicev1.DPUServiceCredentialRequestManagedByLabelValue,
+											},
 										},
 										"deployHostManifests": true,
 										"enabled":             true,
@@ -1077,7 +1098,7 @@ spec:
 			err := scs.Parse()
 			g.Expect(err).NotTo(HaveOccurred())
 
-			got, err := scs.GenerateManifests(context.Background(), tt.vars, skipApplySetCreationOption{})
+			got, err := scs.GenerateManifests(context.Background(), tt.vars)
 			g.Expect(err).NotTo(HaveOccurred())
 
 			// Find DPUServices and DPUServiceCredentialsRequests in results
@@ -1104,10 +1125,13 @@ spec:
 			}
 
 			// Verify DPUServices
-			g.Expect(gotDPUServices).To(BeComparableTo(tt.wantDPUServices))
+			ignoreApplySetLabel := cmpopts.IgnoreMapEntries(func(k, _ string) bool {
+				return k == applysetPartOfLabel
+			})
+			g.Expect(gotDPUServices).To(BeComparableTo(tt.wantDPUServices, ignoreApplySetLabel))
 
 			// Verify DPUServiceCredentialsRequests
-			g.Expect(gotDPUServiceCredentialsRequests).To(BeComparableTo(tt.wantDPUServiceCredentialsRequests))
+			g.Expect(gotDPUServiceCredentialsRequests).To(BeComparableTo(tt.wantDPUServiceCredentialsRequests, ignoreApplySetLabel))
 		})
 	}
 }

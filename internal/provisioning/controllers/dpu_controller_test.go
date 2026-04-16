@@ -83,6 +83,7 @@ var _ = Describe("DPU", func() {
 			Spec: provisioningv1.DPUSpec{
 				SerialNumber: DefaultSerialNumberPrefix + utilrand.String(5),
 				DPUFlavor:    "dpu-flavor",
+				NodeEffect:   provisioningv1.NodeEffect{Action: provisioningv1.Action{NoEffect: ptr.To(true)}},
 			},
 			Status: provisioningv1.DPUStatus{},
 		}
@@ -144,29 +145,30 @@ var _ = Describe("DPU", func() {
 		Expect(k8sClient.Create(ctx, cluster)).NotTo(HaveOccurred())
 
 		By("setting the cluster`s status ready")
-		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(cluster), cluster)).To(Succeed())
-		patch := client.MergeFrom(cluster.DeepCopy())
-
-		cluster.Status.Phase = provisioningv1.PhaseReady
-		cluster.Status.Conditions = append(cluster.Status.Conditions, []metav1.Condition{
-			{
-				Type:               string(provisioningv1.ConditionCreated),
-				Status:             metav1.ConditionTrue,
-				Reason:             "Created",
-				Message:            "dpu_controller_test",
-				LastTransitionTime: metav1.Time{Time: time.Now()},
-			},
-			{
-				Type:               string(provisioningv1.ConditionReady),
-				Status:             metav1.ConditionTrue,
-				Reason:             "HealthCheckPassed",
-				Message:            "dpu_controller_test",
-				LastTransitionTime: metav1.Time{Time: time.Now()},
-			},
-		}...)
-		Expect(k8sClient.Status().Patch(ctx, cluster, patch)).To(Succeed())
-		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(cluster), cluster)).To(Succeed())
-		Expect(cluster.Status.Phase).To(Equal(provisioningv1.PhaseReady))
+		Eventually(func(g Gomega) {
+			g.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(cluster), cluster)).To(Succeed())
+			patch := client.MergeFrom(cluster.DeepCopy())
+			cluster.Status.Phase = provisioningv1.PhaseReady
+			cluster.Status.Conditions = []metav1.Condition{
+				{
+					Type:               string(provisioningv1.ConditionCreated),
+					Status:             metav1.ConditionTrue,
+					Reason:             "Created",
+					Message:            "dpu_controller_test",
+					LastTransitionTime: metav1.Time{Time: time.Now()},
+				},
+				{
+					Type:               string(provisioningv1.ConditionReady),
+					Status:             metav1.ConditionTrue,
+					Reason:             "HealthCheckPassed",
+					Message:            "dpu_controller_test",
+					LastTransitionTime: metav1.Time{Time: time.Now()},
+				},
+			}
+			g.Expect(k8sClient.Status().Patch(ctx, cluster, patch)).To(Succeed())
+			g.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(cluster), cluster)).To(Succeed())
+			g.Expect(cluster.Status.Phase).To(Equal(provisioningv1.PhaseReady))
+		}).WithTimeout(30 * time.Second).WithPolling(200 * time.Millisecond).Should(Succeed())
 
 		return cluster
 	}
@@ -397,7 +399,7 @@ var _ = Describe("DPU", func() {
 					},
 					Spec: provisioningv1.DPUSpec{
 						DPUNodeName: DefaultNode,
-						NodeEffect: &provisioningv1.NodeEffect{
+						NodeEffect: provisioningv1.NodeEffect{
 							Action: provisioningv1.Action{
 								Hold: ptr.To(true),
 							},

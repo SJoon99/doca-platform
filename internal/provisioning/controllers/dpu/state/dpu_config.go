@@ -22,6 +22,7 @@ import (
 	provisioningv1 "github.com/nvidia/doca-platform/api/provisioning/v1alpha1"
 	dutil "github.com/nvidia/doca-platform/internal/provisioning/controllers/dpu/util"
 
+	"k8s.io/apimachinery/pkg/api/meta"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
@@ -34,7 +35,7 @@ func DPUConfig(ctx context.Context, dpu *provisioningv1.DPU, ctrlCtx *dutil.Cont
 		return *state, nil
 	}
 
-	if dpu.Status.AgentStatus == nil || dpu.Status.AgentStatus.RebootMethod == nil {
+	if dpu.Status.AgentStatus == nil || dpu.Status.AgentStatus.RebootMethod == nil || *dpu.Status.AgentStatus.RebootMethod == provisioningv1.RebootMethodUnknown {
 		logger.Info("Waiting for DPU agent to report reboot method")
 		return *state, nil
 	}
@@ -48,14 +49,21 @@ func DPUConfig(ctx context.Context, dpu *provisioningv1.DPU, ctrlCtx *dutil.Cont
 	}
 
 	state.AgentLastStartupTime = dpu.Status.AgentStatus.LastStartupTime
-	switch *dpu.Status.AgentStatus.RebootMethod {
+	rm := *dpu.Status.AgentStatus.RebootMethod
+	logger.Info("DPUConfig: agent reboot method", "dpu", dpu.Name, "namespace", dpu.Namespace, "rebootMethod", rm)
+	switch rm {
 	case provisioningv1.RebootMethodNoAction:
 		if ctrlCtx.Options.DPUInstallInterface == string(provisioningv1.InstallViaRedFish) {
 			state.Phase = provisioningv1.DPUClusterConfig
 		} else {
 			state.Phase = provisioningv1.DPUHostNetworkConfiguration
 		}
+	case provisioningv1.RebootMethodFirmwareReset, provisioningv1.RebootMethodDPUWarmReboot:
+		logger.Info("DPU OS is rebooting, staying in DPUConfig phase")
 	default:
+		// Enter each host reboot cycle with a fresh condition so Rebooting does not
+		// accidentally treat a previous reboot as already completed.
+		meta.RemoveStatusCondition(&state.Conditions, provisioningv1.DPUCondRebooted.String())
 		state.Phase = provisioningv1.DPURebooting
 	}
 

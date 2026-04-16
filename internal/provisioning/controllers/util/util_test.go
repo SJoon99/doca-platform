@@ -25,6 +25,7 @@ import (
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 )
 
 func TestUtil(t *testing.T) {
@@ -221,16 +222,15 @@ var _ = Describe("Util", func() {
 	})
 
 	Context("GenerateDPUNodeMaintenanceObjectName", func() {
-		It("should return error when nodeEffect is nil", func() {
-			name, err := GenerateDPUNodeMaintenanceObjectName("test-node", nil)
+		It("should return error when nodeEffect has no effect type set", func() {
+			name, err := GenerateDPUNodeMaintenanceObjectName("test-node", provisioningv1.NodeEffect{})
 			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("nodeEffect is nil"))
 			Expect(name).To(BeEmpty())
 		})
 
 		It("should generate name for Drain effect", func() {
 			drain := true
-			nodeEffect := &provisioningv1.NodeEffect{
+			nodeEffect := provisioningv1.NodeEffect{
 				Action: provisioningv1.Action{
 					Drain: &drain,
 				},
@@ -242,7 +242,7 @@ var _ = Describe("Util", func() {
 
 		It("should generate name for Hold effect", func() {
 			hold := true
-			nodeEffect := &provisioningv1.NodeEffect{
+			nodeEffect := provisioningv1.NodeEffect{
 				Action: provisioningv1.Action{
 					Hold: &hold,
 				},
@@ -254,7 +254,7 @@ var _ = Describe("Util", func() {
 
 		It("should generate name for CustomAction effect", func() {
 			customAction := "my-action"
-			nodeEffect := &provisioningv1.NodeEffect{
+			nodeEffect := provisioningv1.NodeEffect{
 				Action: provisioningv1.Action{
 					CustomAction: &customAction,
 				},
@@ -265,7 +265,7 @@ var _ = Describe("Util", func() {
 		})
 
 		It("should generate name for Taint effect with hash", func() {
-			nodeEffect := &provisioningv1.NodeEffect{
+			nodeEffect := provisioningv1.NodeEffect{
 				Action: provisioningv1.Action{
 					Taint: &corev1.Taint{
 						Key:    "test-key",
@@ -282,7 +282,7 @@ var _ = Describe("Util", func() {
 
 		It("should generate name for NoEffect", func() {
 			noEffect := true
-			nodeEffect := &provisioningv1.NodeEffect{
+			nodeEffect := provisioningv1.NodeEffect{
 				Action: provisioningv1.Action{
 					NoEffect: &noEffect,
 				},
@@ -293,7 +293,7 @@ var _ = Describe("Util", func() {
 		})
 
 		It("should generate name for CustomLabel effect with hash", func() {
-			nodeEffect := &provisioningv1.NodeEffect{
+			nodeEffect := provisioningv1.NodeEffect{
 				Action: provisioningv1.Action{
 					CustomLabel: map[string]string{
 						"label-key": "label-value",
@@ -390,6 +390,32 @@ var _ = Describe("Util", func() {
 			input := []string{"same", "same", "same"}
 			result := RemoveDuplicates(input)
 			Expect(result).To(Equal([]string{"same"}))
+		})
+	})
+
+	Context("GenerateBFBTaskName", func() {
+		It("should include UID in task name", func() {
+			bfb := provisioningv1.BFB{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: "default",
+					Name:      "test-bfb",
+					UID:       types.UID("uid-123"),
+				},
+			}
+			Expect(GenerateBFBTaskName(bfb)).To(Equal("default-test-bfb-uid-123"))
+		})
+
+		It("should produce different task names for same namespace/name with different UIDs", func() {
+			baseMeta := metav1.ObjectMeta{
+				Namespace: "default",
+				Name:      "test-bfb",
+			}
+			bfb1 := provisioningv1.BFB{ObjectMeta: baseMeta}
+			bfb1.UID = types.UID("uid-1")
+			bfb2 := provisioningv1.BFB{ObjectMeta: baseMeta}
+			bfb2.UID = types.UID("uid-2")
+
+			Expect(GenerateBFBTaskName(bfb1)).NotTo(Equal(GenerateBFBTaskName(bfb2)))
 		})
 	})
 })

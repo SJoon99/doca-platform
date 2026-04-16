@@ -91,12 +91,8 @@ func (f *fromDPUService) Parse() error {
 	return nil
 }
 
-func (f *fromDPUService) GenerateManifests(_ context.Context, vars Variables, options ...GenerateManifestOption) ([]client.Object, error) {
+func (f *fromDPUService) GenerateManifests(_ context.Context, vars Variables) ([]client.Object, error) {
 	ret := []client.Object{}
-	opts := &GenerateManifestOptions{}
-	for _, option := range options {
-		option.Apply(opts)
-	}
 	if ok := vars.DisableSystemComponents[f.Name()]; ok {
 		return nil, nil
 	}
@@ -104,11 +100,7 @@ func (f *fromDPUService) GenerateManifests(_ context.Context, vars Variables, op
 	labelsToAdd := map[string]string{
 		operatorv1.DPFComponentLabelKey: f.Name().String(),
 		release.DPFVersionLabelKey:      release.DPFVersion(),
-	}
-	applySetID := ApplySetID(vars.Namespace, f)
-	// Add the ApplySet labels to the manifests unless disabled.
-	if !opts.skipApplySet {
-		labelsToAdd[applysetPartOfLabel] = applySetID
+		applysetPartOfLabel:             ApplySetID(vars.Namespace, f),
 	}
 
 	dpuServiceCopy, err := f.applyDPUServiceEdits(vars, labelsToAdd)
@@ -292,7 +284,7 @@ func multusEdits(vars Variables) ([]StructuredEdit, error) {
 	}, nil
 }
 
-func perClusterEdits(chartName string, secretName string, serviceAccountName string) []StructuredEdit {
+func perClusterEdits(chartName string, secretName string, serviceAccountName string, labels map[string]string) []StructuredEdit {
 	edits := []StructuredEdit{}
 
 	// Create the projected volume configuration for the tokenfile
@@ -377,6 +369,10 @@ func perClusterEdits(chartName string, secretName string, serviceAccountName str
 		dpuServiceAddValueEdit(envVars, chartName, "env"),
 		dpuServiceAddValueEdit(volumeMounts, chartName, "volumeMounts"),
 	)
+
+	if len(labels) > 0 {
+		edits = append(edits, dpuServiceAddValueEdit(labels, chartName, "serviceAccount", "labels"))
+	}
 	return edits
 }
 

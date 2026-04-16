@@ -60,6 +60,7 @@ var _ = Describe("Allocator", func() {
 				BFB:           "test-bfb",
 				PCIAddress:    ptr.To("0000-4b-00"),
 				DPUFlavor:     "test-flavor",
+				NodeEffect:    provisioningv1.NodeEffect{Action: provisioningv1.Action{NoEffect: ptr.To(true)}},
 				Cluster: provisioningv1.K8sCluster{
 					ClusterSpec: provisioningv1.ClusterSpec{
 						Selector: dpuClusterSelector,
@@ -322,6 +323,24 @@ var _ = Describe("Allocator", func() {
 				g.Expect(k8sClient.Get(ctx, cutil.GetNamespacedName(dpu), fetchedDPU)).To(Succeed())
 				return types.NamespacedName{Name: fetchedDPU.Spec.Cluster.Name, Namespace: fetchedDPU.Spec.Cluster.Namespace}
 			}).WithTimeout(10 * time.Second).Should(Equal(types.NamespacedName{}))
+		})
+		It("skips DPUCluster that is being deleted", func() {
+			dpu := createDPU("dpu", nil)
+			Expect(k8sClient.Create(context.TODO(), dpu)).To(Succeed())
+			dcDeleting := createDPUCluster("dc-deleting", 20, true, nil)
+			now := metav1.Now()
+			dcDeleting.DeletionTimestamp = &now
+			alloc.SaveCluster(dcDeleting)
+			dcReady := createDPUCluster("dc-ready", 20, true, nil)
+			alloc.SaveCluster(dcReady)
+			result, err := alloc.Allocate(ctx, dpu)
+			Expect(err).To(Succeed())
+			Expect(result).To(Equal(allocator.AllocateResult{Name: dcReady.Name, Namespace: dcReady.Namespace}))
+			Eventually(func(g Gomega) types.NamespacedName {
+				fetchedDPU := &provisioningv1.DPU{}
+				g.Expect(k8sClient.Get(ctx, cutil.GetNamespacedName(dpu), fetchedDPU)).To(Succeed())
+				return types.NamespacedName{Name: fetchedDPU.Spec.Cluster.Name, Namespace: fetchedDPU.Spec.Cluster.Namespace}
+			}).WithTimeout(10 * time.Second).Should(Equal(cutil.GetNamespacedName(dcReady)))
 		})
 		It("no cluster", func() {
 			dpu := createDPU("dpu", nil)

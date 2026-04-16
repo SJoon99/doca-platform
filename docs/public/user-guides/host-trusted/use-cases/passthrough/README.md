@@ -216,7 +216,7 @@ metadata:
   namespace: dpu-cplane-tenant1
 spec:
   type: kamaji
-  maxNodes: 10
+  maxNodes: 1000
   clusterEndpoint:
     # deploy keepalived instances on the nodes that match the given nodeSelector.
     keepalived:
@@ -390,12 +390,16 @@ metadata:
   name: passthrough
   namespace: dpf-operator-system
 spec:
+  strategy:
+    type: RollingUpdate
   dpuNodeSelector:
     matchLabels:
       feature.node.kubernetes.io/dpu-enabled: "true"
   dpuTemplate:
     spec:
       dpuFlavor: passthrough-$TAG
+      nodeEffect:
+        drain: true
       bfb:
         name: bf-bundle-$TAG
 ```

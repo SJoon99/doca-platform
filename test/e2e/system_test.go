@@ -114,10 +114,11 @@ func SetInput() {
 			}
 		}
 		By(fmt.Sprintf("Using API server VIP %s:%d for zero-trust kubeconfig", controlPlaneIP, apiServerPort))
-		dpfOperatorConfig.Spec.Overrides = &operatorv1.Overrides{
-			KubernetesAPIServerVIP:  ptr.To(controlPlaneIP),
-			KubernetesAPIServerPort: ptr.To(apiServerPort),
+		if dpfOperatorConfig.Spec.Overrides == nil {
+			dpfOperatorConfig.Spec.Overrides = &operatorv1.Overrides{}
 		}
+		dpfOperatorConfig.Spec.Overrides.KubernetesAPIServerVIP = ptr.To(controlPlaneIP)
+		dpfOperatorConfig.Spec.Overrides.KubernetesAPIServerPort = ptr.To(apiServerPort)
 	}
 
 	if isGinkgoLabelApplied(Domain.Scale) {
@@ -127,6 +128,14 @@ func SetInput() {
 				Disable: ptr.To(true),
 			},
 		}
+	}
+
+	if prereqsNamespace != "" {
+		if dpfOperatorConfig.Spec.Overrides == nil {
+			dpfOperatorConfig.Spec.Overrides = &operatorv1.Overrides{}
+		}
+
+		dpfOperatorConfig.Spec.Overrides.ArgoCDNamespace = ptr.To(prereqsNamespace)
 	}
 
 	input = &systemTestInput{
@@ -339,7 +348,7 @@ var _ = Describe("DPF System tests - Core", SpecPriority(CoreTestPriority), Labe
 		It("delete the DPUServices and check that the applications are cleaned up", Labels{Domain.ZeroTrust}, func() {
 			ValidateDPUServiceDeletion(ctx, input)
 		})
-		It("verify that the ImagePullSecrets have been synced correctly and cleaned up", Labels{Domain.ZeroTrust}, func() {
+		It("verify that the ImagePullSecrets have been synced correctly and cleaned up", Labels{Domain.ZeroTrust, Domain.ImagePullSecretsSync}, func() {
 			ValidateImagePullSecretsSync(ctx, input)
 		})
 	})
@@ -495,6 +504,9 @@ var _ = Describe("DPF System tests - Core", SpecPriority(CoreTestPriority), Labe
 				ValidateDPUDeploymentDPUServiceDisruptiveUpgradeDrain(ctx, input)
 			}
 		})
+		It("should validate DPUDeployment disruptive upgrade of standard DPUServices with bad configuration", func() {
+			ValidateDPUDeploymentDPUServiceDisruptiveUpgradeBadConfigurationAndBack(ctx, input)
+		})
 		It("should validate DPUDeployment disruptive upgrade of in-cluster DPUServices", func() {
 			ValidateDPUDeploymentInClusterDPUServiceDisruptiveUpgrade(ctx, input)
 		})
@@ -504,6 +516,9 @@ var _ = Describe("DPF System tests - Core", SpecPriority(CoreTestPriority), Labe
 			} else {
 				ValidateDPUDeploymentDPUServiceChainDisruptiveUpgradeDrain(ctx, input)
 			}
+		})
+		It("should validate DPUDeployment disruptive upgrade of DPUServiceChain with bad configuration", func() {
+			ValidateDPUDeploymentDPUServiceChainDisruptiveUpgradeBadConfigurationAndBack(ctx, input)
 		})
 	})
 

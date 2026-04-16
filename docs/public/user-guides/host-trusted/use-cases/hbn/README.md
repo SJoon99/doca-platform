@@ -220,7 +220,7 @@ metadata:
   namespace: dpu-cplane-tenant1
 spec:
   type: kamaji
-  maxNodes: 10
+  maxNodes: 1000
   clusterEndpoint:
     # deploy keepalived instances on the nodes that match the given nodeSelector.
     keepalived:
@@ -258,7 +258,7 @@ Traffic can be routed through HBN on the worker node by mounting the DPU physica
 
 ```shell
 helm repo add nvidia https://helm.ngc.nvidia.com/nvidia --force-update
-helm upgrade --no-hooks --install --create-namespace --namespace nvidia-network-operator network-operator nvidia/network-operator --version 25.7.0 -f ./manifests/03-enable-accelerated-interfaces/helm-values/network-operator.yml
+helm upgrade --no-hooks --install --create-namespace --namespace nvidia-network-operator network-operator nvidia/network-operator --version 26.1.0 -f ./manifests/03-enable-accelerated-interfaces/helm-values/network-operator.yml
 ```
 
 <details markdown="1"><summary>NVIDIA Network Operator Helm values</summary>
@@ -304,8 +304,8 @@ spec:
     multus:
       image: multus-cni
       imagePullSecrets: []
-      repository: ghcr.io/k8snetworkplumbingwg
-      version: v3.9.3
+      repository: nvcr.io/nvidia/mellanox
+      version: network-operator-v26.1.0
 ```
 </details>
 
@@ -494,6 +494,8 @@ spec:
   dpus:
     bfb: bf-bundle-$TAG
     flavor: hbn-$TAG
+    nodeEffect:
+      drain: true
     dpuSets:
     - nameSuffix: "dpuset1"
       dpuNodeSelector:
