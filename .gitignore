@@ -67,3 +67,4 @@ build/
 # Local project context
 CLAUDE.md
 .omc/
+DOCA_BF3/docs/doca_platform/fully-*
