@@ -327,11 +327,11 @@ GitOps values.yaml
 
 함께 보면 좋은 문서
 
-- `DOCA_BF3/docs/doca_platform/dpf-current-cluster-and-dpu-topology.md`
+- [`architecture/cluster-topology.md`](../architecture/cluster-topology.md)
   - 현재 live cluster 구조
-- `DOCA_BF3/docs/doca_platform/dpf-troubleshooting.md`
+- [`troubleshooting/README.md`](../troubleshooting/README.md)
   - 문제 유형별 트러블슈팅
-- `DOCA_BF3/docs/doca_platform/dpf-network-architecture.md`
+- [`architecture/network-architecture.md`](../architecture/network-architecture.md)
   - 네트워크 구조 설명
 
 # 최종 정리

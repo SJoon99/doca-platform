@@ -391,9 +391,9 @@ sequenceDiagram
 
 ## 참고 문서
 
-- [Phase 0 — Harbor Registry](../DPF_DevOps/phase0-harbor-registry-setup.md)
-- [Phase 1 — NFS Mount](../DPF_DevOps/phase1-nfs-node4-mount.md)
-- [Phase 2 — doca-dev DPUService](../DPF_DevOps/phase2-doca-dev-dpuservice.md)
-- [DPF Cloud-Native Dev Cycle](./dpf-cloud-native-dev.md)
+- [Phase 0 — Harbor Registry](../dpf-guides/phases/phase0-harbor.md)
+- [Phase 1 — NFS Mount](../dpf-guides/phases/phase1-nfs.md)
+- [Phase 2 — doca-dev DPUService](../dpf-guides/phases/phase2-doca-dev.md)
+- [DPF Cloud-Native Dev Cycle](../dpf-guides/cloud-native-dev.md)
 - [Cluster Overview](./cluster-overview.md)
-- [DPF Troubleshooting](./dpf-troubleshooting.md)
+- [DPF Troubleshooting](../troubleshooting/README.md)

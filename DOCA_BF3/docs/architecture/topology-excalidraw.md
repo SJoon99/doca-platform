@@ -7,7 +7,7 @@ title: Current Cluster Topology Excalidraw Guide
 # 파일 위치
 
 - Excalidraw import 파일
-  - `DOCA_BF3/docs/doca_platform/dpf-current-cluster-topology.excalidraw.json`
+  - `DOCA_BF3/docs/architecture/topology.excalidraw.json`
 
 # 이 그림에 담은 내용
 
@@ -77,9 +77,9 @@ title: Current Cluster Topology Excalidraw Guide
 - Excalidraw 웹 UI
   - `https://excalidraw.com`
   - `Open` -> `Load from file`
-  - `dpf-current-cluster-topology.excalidraw.json` 선택
+  - `topology.excalidraw.json` 선택
 
 # 참고 문서
 
-- `DOCA_BF3/docs/doca_platform/dpf-current-cluster-and-dpu-topology.md`
-- `DOCA_BF3/docs/doca_platform/dpf-build-history-and-image-usage.md`
+- [`architecture/cluster-topology.md`](./cluster-topology.md)
+- [`reference/build-history.md`](../reference/build-history.md)

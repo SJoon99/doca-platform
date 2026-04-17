@@ -405,7 +405,7 @@ kubectl --kubeconfig /tmp/dpu-cplane-tenant1-admin.conf get nodes -o wide
 
 # 관련 문서
 
-- `DOCA_BF3/docs/doca_platform/dpf-build-history-and-image-usage.md`
+- [`reference/build-history.md`](../reference/build-history.md)
   - 어떤 이미지를 왜 빌드했는지
   - 실제 빌드 명령
   - helper image 세트가 런타임에서 어떻게 연결되는지
