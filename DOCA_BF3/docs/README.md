@@ -45,6 +45,7 @@ DPF로 무엇을 어떻게 하는지 — 작업 수행 중심.
 - [dma-copy/](./applications/dma-copy/) — DMA copy 예제
 - [doca-flow/](./applications/doca-flow/) — DOCA Flow (예정)
 - [offloading/](./applications/offloading/) — MTU/OVS 오프로딩 설정
+- [telemetry/](./applications/telemetry/) — BF3 수집 가능 정보 (flow counter, NetFlow, PCC, retx, PCIe)
 
 ---
 

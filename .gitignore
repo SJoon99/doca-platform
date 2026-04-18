@@ -72,3 +72,4 @@ CLAUDE.md
 # DOCA_BF3 docs — exclude bulky external references and runtime state
 DOCA_BF3/docs/official_docs/
 DOCA_BF3/docs/**/*.pdf
+DOCA_BF3/docs/doca_platform/fully-*
