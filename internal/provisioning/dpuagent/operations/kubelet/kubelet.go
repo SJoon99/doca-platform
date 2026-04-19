@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/nvidia/doca-platform/internal/provisioning/dpuagent/operations"
@@ -178,7 +179,7 @@ func (c *ConfigureKubelet) ShouldSkip(ctx *operations.Context) bool {
 }
 
 func (c *ConfigureKubelet) ShouldUpdateStatusBeforeContinue(ctx *operations.Context) bool {
-	return false
+	return true
 }
 
 func (c *ConfigureKubelet) Execute(execCtx context.Context, optCtx *operations.Context) error {
@@ -236,7 +237,31 @@ func (c *ConfigureKubelet) Execute(execCtx context.Context, optCtx *operations.C
 	if err := c.addKubeletCustomizedConfig(); err != nil {
 		return fmt.Errorf("failed to add kubelet customized config: %w", err)
 	}
+	kubeletVersion, err := c.KubeletVersion()
+	if err != nil {
+		return fmt.Errorf("failed to get kubelet version: %w", err)
+	}
+	optCtx.Status.KubeletVersion = kubeletVersion
 	return nil
+}
+
+func (c *ConfigureKubelet) KubeletVersion() (*string, error) {
+	if c.runBash == nil {
+		c.runBash = bash.Run
+	}
+	stdout, stderr, err := c.runBash("kubelet --version")
+	if err != nil {
+		return nil, fmt.Errorf("failed to run kubelet version: %w, stdout: %s, stderr: %s", err, stdout.String(), stderr.String())
+	}
+	if stdout.Len() == 0 {
+		return nil, fmt.Errorf("kubelet version output is empty, stderr: %s", stderr.String())
+	}
+	output := strings.TrimSpace(stdout.String())
+	if !strings.HasPrefix(output, "Kubernetes ") {
+		return nil, fmt.Errorf("unexpected kubelet version output: %s", output)
+	}
+	kubeletVersion := strings.TrimPrefix(output, "Kubernetes ")
+	return &kubeletVersion, nil
 }
 
 func (c *ConfigureKubelet) createKubeletSystemdDropIn() error {

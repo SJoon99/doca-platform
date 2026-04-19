@@ -1000,8 +1000,9 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `address` _string_ | Address is the address used to access the BFB Registry. The address must start with "http://".<br />By default, the BFB Registry can be accessed via its Service.<br />For non-kubernetes environments, this must be set due to the lack of kubelet on worker nodes.<br />For zero-trust environments, this must be set so that the BFB Registry can be accessed from DPU BMC. |  | Pattern: `^http://` <br />Optional: \{\} <br /> |
-| `port` _integer_ | Port is the port on which the registry instances will listen |  | Maximum: 65535 <br />Minimum: 1 <br />Optional: \{\} <br /> |
+| `address` _string_ | Address is the address used to access the BFB Registry. The address must start with "http://".<br />By default, the BFB Registry can be accessed via its Service.<br />For non-kubernetes environments, this must be set due to the lack of kubelet on worker nodes.<br />For zero-trust environments, this must be set so that the BFB Registry can be accessed from DPU BMC.<br />Deprecated: Address is deprecated and will be removed in a future release. |  | Pattern: `^http://` <br />Optional: \{\} <br /> |
+| `port` _integer_ | Port is the port on which the registry instances will listen<br />Deprecated: Address is deprecated and will be removed in a future release. |  | Maximum: 65535 <br />Minimum: 1 <br />Optional: \{\} <br /> |
+| `loadBalancerAddress` _string_ | LoadBalancerAddress is the address of the load balancer for the BFB Registry which the hostagent/redfish use to fetch the BFB and generated bf.cfg.<br />To enable the load balancer, you need to deploy your own load balancer controller and configure the LoadBalancerAddress field.<br />Then check the bfb-registry nodeport service and make your load balancer controller to distribute the requests to the bfb-registry nodeport. |  | Pattern: `^http://` <br />Optional: \{\} <br /> |
 
 
 #### ResourceComponentConfig
@@ -1210,6 +1211,7 @@ _Appears in:_
 | `initialBootID` _string_ | InitialBootID is the boot ID of the DPU OS during the first boot |  |  |
 | `rebootMethod` _[RebootMethodType](#rebootmethodtype)_ | RebootMethod is the type of reset/reboot set by the DPU agent<br />See enum values in RebootMethodType.<br />No default is set intentionally: nil means "check not run or not applicable"<br />(e.g. legacy flow, or agent has not run the check yet);<br />a non-nil value means the check ran and this is the result. |  | Enum: [Unknown NoAction PowerCycle SystemReboot SystemLevelReset FirmwareReset DPUWarmReboot] <br />Optional: \{\} <br /> |
 | `rebootSequenceCount` _integer_ | RebootSequenceCount is the length of the current non-NoAction RebootMethod sequence:<br />it increments on each agent run that reports a RebootMethod other than NoAction and<br />resets to 0 when the agent reports NoAction. Used with RebootMethod to bound host reboot loops. |  | Minimum: 0 <br />Optional: \{\} <br /> |
+| `kubeletVersion` _string_ | KubeletVersion represents the kubelet version running on the DPU. |  |  |
 | `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#condition-v1-meta) array_ | Conditions contains the conditions reported from inside the DPU |  | Optional: \{\} <br /> |
 
 
@@ -3972,7 +3974,7 @@ _Appears in:_
 | `dpus` _[DPUs](#dpus)_ | DPUs contains the DPU related configuration |  | Required: \{\} <br /> |
 | `services` _object (keys:string, values:[DPUDeploymentServiceConfiguration](#dpudeploymentserviceconfiguration))_ | Services contains the DPUDeploymentService related configuration. The key is the deploymentServiceName and the value is its<br />configuration. All underlying objects must specify the same deploymentServiceName in order to be able to be consumed by the<br />DPUDeployment. |  | MaxProperties: 50 <br />MinProperties: 1 <br />Required: \{\} <br /> |
 | `serviceChains` _[ServiceChains](#servicechains)_ | ServiceChains contains the configuration related to the DPUServiceChains that the DPUDeployment creates. |  | Optional: \{\} <br /> |
-| `revisionHistoryLimit` _integer_ | The maximum number of revisions that can be retained during upgrades.<br />Defaults to 10. | 10 | Optional: \{\} <br /> |
+| `revisionHistoryLimit` _integer_ | The maximum number of revisions that can be retained during upgrades.<br />Defaults to 10. | 10 | Minimum: 1 <br />Optional: \{\} <br /> |
 
 
 #### DPUDeploymentStatus
