@@ -321,6 +321,5 @@ Slot 0: ID=0x1001 (BBR-like), ENABLED
 
 ## 관련 문서
 
-- [`../../DataFacility_Research/fully-cloud-native-data-facility-research-draft.md`](../../DataFacility_Research/fully-cloud-native-data-facility-research-draft.md) — 연구 draft 전체
 - [`../doca-flow/`](../doca-flow/) — DOCA Flow 애플리케이션 (Layer 1 counter 설치 위치)
 - [`../offloading/mtu-ovs-setup.md`](../offloading/mtu-ovs-setup.md) — BF3 link 성능 trouble shooting
